@@ -1444,9 +1444,77 @@ export function formatTaskShowJson(entry: TaskShowEntry) {
   return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
+const ansiCodes = {
+  reset: "\u001b[0m",
+  bold: "\u001b[1m",
+  dim: "\u001b[2m",
+  red: "\u001b[31m",
+  green: "\u001b[32m",
+  yellow: "\u001b[33m",
+  blue: "\u001b[34m",
+  magenta: "\u001b[35m",
+  cyan: "\u001b[36m",
+  gray: "\u001b[90m",
+  brightWhite: "\u001b[97m",
+};
+
+function shouldUseColor(
+  env: NodeJS.ProcessEnv = process.env,
+  stream: NodeJS.WriteStream = process.stdout,
+) {
+  if (!stream.isTTY) {
+    return false;
+  }
+  if (env.NO_COLOR !== undefined) {
+    return false;
+  }
+  if (env.TERM?.trim().toLowerCase() === "dumb") {
+    return false;
+  }
+  if (env.FORCE_COLOR?.trim() === "0") {
+    return false;
+  }
+  return true;
+}
+
+function applyAnsi(text: string, enabled: boolean, ...codes: string[]) {
+  if (!enabled || codes.length === 0) {
+    return text;
+  }
+  return `${codes.join("")}${text}${ansiCodes.reset}`;
+}
+
+const statusColors: Record<TaskStatus, string> = {
+  open: ansiCodes.blue,
+  in_progress: ansiCodes.yellow,
+  done: ansiCodes.green,
+  cancelled: ansiCodes.red,
+};
+
 function formatTaskSummary(entry: TaskListEntry) {
+  const useColor = shouldUseColor();
   const claimed = entry.claimed_by ? entry.claimed_by : "-";
-  return `${entry.id} ${entry.name} [${entry.status}] p${entry.priority} ${claimed}`;
+  const id = applyAnsi(entry.id, useColor, ansiCodes.gray);
+  const name = applyAnsi(
+    entry.name,
+    useColor,
+    ansiCodes.brightWhite,
+    ansiCodes.bold,
+  );
+  const status = applyAnsi(
+    `[${entry.status}]`,
+    useColor,
+    statusColors[entry.status],
+  );
+  const priority = applyAnsi(
+    `p${entry.priority}`,
+    useColor,
+    ansiCodes.magenta,
+  );
+  const claimedBy = entry.claimed_by
+    ? applyAnsi(entry.claimed_by, useColor, ansiCodes.cyan)
+    : applyAnsi("-", useColor, ansiCodes.dim);
+  return `${id} ${name} ${status} ${priority} ${claimedBy}`;
 }
 
 function formatTaskDetails(entry: TaskShowEntry) {
