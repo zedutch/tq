@@ -129,7 +129,7 @@
     - Write tests for `--json` output schemas for list and show.
     - Run `bun test` to verify everything passes.
     - Update `README.md` if any testing or usage notes change.
-  done: false
+  done: true
 
 - category: scaffolding
   description: Add an ESLint configuration so lint checks can run.
