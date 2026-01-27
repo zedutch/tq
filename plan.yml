@@ -137,4 +137,4 @@
     - Decide on a minimal ESLint config compatible with Bun + TypeScript.
     - Add the config file at the repo root.
     - Document the lint command in the README if needed.
-  done: false
+  done: true

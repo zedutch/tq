@@ -6,6 +6,12 @@ To install dependencies:
 bun install
 ```
 
+To lint the codebase:
+
+```bash
+bun run lint
+```
+
 To run the CLI:
 
 ```bash
