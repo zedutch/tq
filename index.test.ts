@@ -25,7 +25,7 @@ import {
   runGitCommandPassthrough,
   runGitCommand,
   resolveConfigPath,
-  resolveGlobalTasksBase,
+  resolveStealthTasksBase,
   resolveMachineName,
   resolveTasksDirectory,
   resolveXdgConfigHome,
@@ -88,7 +88,7 @@ describe("config paths", () => {
     expect(resolveXdgConfigHome(env)).toBe("/tmp/custom-config");
     expect(resolveXdgDataHome(env)).toBe("/tmp/custom-data");
     expect(resolveConfigPath(env)).toBe("/tmp/custom-config/tq/config.toml");
-    expect(resolveGlobalTasksBase(env)).toBe("/tmp/custom-data/tq/tasks");
+    expect(resolveStealthTasksBase(env)).toBe("/tmp/custom-data/tq/tasks");
   });
 });
 
@@ -200,7 +200,7 @@ describe("workspace resolution", () => {
     }
   });
 
-  test("resolves global workspace directory when registered", async () => {
+  test("resolves stealth workspace directory when registered", async () => {
     await withTempEnv(async () => {
       const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
       const workspaceId = "a1b2";
@@ -214,9 +214,9 @@ describe("workspace resolution", () => {
       try {
         const resolved = await resolveTasksDirectory(workspace);
         expect(resolved).toEqual({
-          mode: "global",
+          mode: "stealth",
           workspacePath: path.resolve(workspace),
-          tasksDir: path.join(resolveGlobalTasksBase(), workspaceId),
+          tasksDir: path.join(resolveStealthTasksBase(), workspaceId),
           workspaceId,
         });
       } finally {
@@ -225,14 +225,14 @@ describe("workspace resolution", () => {
     });
   });
 
-  test("errors when global workspace is not registered", async () => {
+  test("errors when stealth workspace is not registered", async () => {
     await withTempEnv(async () => {
       const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
 
-      try {
-        await expect(resolveTasksDirectory(workspace)).rejects.toThrow(
-          "Workspace not registered for global mode",
-        );
+        try {
+          await expect(resolveTasksDirectory(workspace)).rejects.toThrow(
+            "Workspace not initialized",
+          );
       } finally {
         await rm(workspace, { recursive: true, force: true });
       }
@@ -266,20 +266,20 @@ describe("workspace init", () => {
     });
   });
 
-  test("initializes global mode and registers workspace", async () => {
+  test("initializes stealth mode and registers workspace", async () => {
     await withTempEnv(async () => {
       const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
       const resolvedWorkspacePath = path.resolve(workspace);
 
       try {
         const resolved = await initWorkspace({
-          mode: "global",
+          mode: "stealth",
           workspacePath: workspace,
           initGit: false,
         });
 
         const config = await loadConfig();
-        expect(resolved.mode).toBe("global");
+        expect(resolved.mode).toBe("stealth");
         expect(resolved.workspacePath).toBe(resolvedWorkspacePath);
         expect(resolved.workspaceId).toBeTruthy();
         expect(config.workspaces[resolvedWorkspacePath]).toBe(

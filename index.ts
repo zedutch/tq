@@ -57,7 +57,7 @@ export function resolveConfigPath(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveXdgConfigHome(env), "tq", "config.toml");
 }
 
-export function resolveGlobalTasksBase(env: NodeJS.ProcessEnv = process.env) {
+export function resolveStealthTasksBase(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveXdgDataHome(env), "tq", "tasks");
 }
 
@@ -176,7 +176,7 @@ export function resolveMachineName(
   );
 }
 
-type WorkspaceMode = "local" | "global";
+type WorkspaceMode = "local" | "stealth";
 
 export type ResolvedWorkspace = {
   mode: WorkspaceMode;
@@ -714,14 +714,14 @@ export async function resolveTasksDirectory(
   const workspaceId = config.workspaces[resolvedWorkspacePath];
   if (!workspaceId) {
     throw new Error(
-      `Workspace not registered for global mode: ${resolvedWorkspacePath}. Run "tq init --mode global" first.`,
+      `Workspace not initialized: ${resolvedWorkspacePath}. Run "tq init" or "tq init --stealth" first.`,
     );
   }
 
   return {
-    mode: "global",
+    mode: "stealth",
     workspacePath: resolvedWorkspacePath,
-    tasksDir: path.join(resolveGlobalTasksBase(env), workspaceId),
+    tasksDir: path.join(resolveStealthTasksBase(env), workspaceId),
     workspaceId,
   };
 }
@@ -769,13 +769,13 @@ export async function initWorkspace(
 
   if (await isDirectory(localTasksDir)) {
     throw new Error(
-      `Workspace already has a local .tasks directory at ${localTasksDir}. Remove it or run "tq init" without --mode global.`,
+      `Workspace already has a .tasks directory at ${localTasksDir}. Remove it or run "tq init" without --stealth.`,
     );
   }
 
   const config = await loadConfig(env);
   let workspaceId = config.workspaces[workspacePath];
-  const baseDir = resolveGlobalTasksBase(env);
+  const baseDir = resolveStealthTasksBase(env);
   if (!workspaceId) {
     const existingIds = new Set(Object.values(config.workspaces));
     workspaceId = await generateWorkspaceId(existingIds, baseDir);
@@ -788,7 +788,7 @@ export async function initWorkspace(
   await ensureGitRepository(tasksDir, options.initGit ?? true, env);
 
   return {
-    mode: "global",
+    mode: "stealth",
     workspacePath,
     tasksDir,
     workspaceId,
@@ -1593,7 +1593,7 @@ Options:
   -h, --help  show help
 
 Init options:
-  -m,  --mode <local|global>  choose workspace mode (default: local)
+  --stealth  store tasks in XDG data dir (no .tasks in this repo; use when you can't or won't ignore it)
 
 Create options:
   -d, --description <text>  task description
@@ -1636,7 +1636,7 @@ Usage:
   tq init [options]
 
 Options:
-  -m, --mode <local|global>  choose workspace mode (default: local)
+  --stealth  store tasks in XDG data dir (no .tasks in this repo; use when you can't or won't ignore it)
   -h, --help                 show help for init
 `,
   create: `tq create - create a task
@@ -2008,21 +2008,11 @@ function fail(message: string, includeHelp: boolean) {
 }
 
 function parseInitMode(flags: Record<string, FlagBucket>): WorkspaceMode {
-  const raw = readFlagValue(flags.mode ?? flags.m);
-  if (raw === undefined) {
-    return "local";
+  if (flags.mode !== undefined || flags.m !== undefined) {
+    throw new Error('Init no longer supports --mode. Use "tq init --stealth" for stealth storage.');
   }
-  if (raw === true) {
-    throw new Error("Init mode requires a value: --mode local|global.");
-  }
-  if (typeof raw !== "string") {
-    throw new Error("Init mode must be a string: local or global.");
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "local" || normalized === "global") {
-    return normalized;
-  }
-  throw new Error(`Unsupported init mode "${raw}". Use local or global.`);
+  const stealth = parseFlagBoolean(flags.stealth, "Stealth");
+  return stealth ? "stealth" : "local";
 }
 
 async function handleInitCommand(parsed: ParsedArgs) {
@@ -2038,8 +2028,9 @@ async function handleInitCommand(parsed: ParsedArgs) {
   }
   try {
     const resolved = await initWorkspace({ mode });
+    const modeLabel = resolved.mode === "stealth" ? "stealth " : "";
     console.log(
-      `Initialized ${resolved.mode} workspace with tasks at ${resolved.tasksDir}.`,
+      `Initialized ${modeLabel}workspace with tasks at ${resolved.tasksDir}.`,
     );
     return 0;
   } catch (error) {
