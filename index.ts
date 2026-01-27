@@ -826,16 +826,7 @@ export async function createTask(options: CreateTaskOptions) {
 
   if (!options.skipGit) {
     await prepareTasksRepository(options.tasksDir, env);
-    const staged = await runGitCommand(
-      options.tasksDir,
-      ["diff", "--cached", "--name-only"],
-      { env },
-    );
-    if (staged.stdout.trim()) {
-      throw new Error(
-        "Tasks repository has staged changes. Commit or unstage them before creating a task.",
-      );
-    }
+    await ensureNoStagedChanges(options.tasksDir, env, "creating");
   }
 
   const existingIds = await listTaskIds(options.tasksDir);
@@ -856,23 +847,14 @@ export async function createTask(options: CreateTaskOptions) {
   await Bun.write(taskPath, content);
 
   if (!options.skipGit) {
-    await runGitCommand(options.tasksDir, ["add", "--", taskFileName], {
-      env,
-    });
-    const staged = await runGitCommand(
-      options.tasksDir,
-      ["diff", "--cached", "--name-only"],
-      { env },
-    );
-    if (!staged.stdout.trim()) {
-      return { id, path: taskPath, frontmatter, description };
+    if (await stageTaskFile(options.tasksDir, taskFileName, env)) {
+      await runGitCommand(
+        options.tasksDir,
+        withGitCommitIdentity(["commit", "-m", `tq: create task ${id}`], env),
+        { env },
+      );
+      await pushTasksRepository(options.tasksDir, env);
     }
-    await runGitCommand(
-      options.tasksDir,
-      withGitCommitIdentity(["commit", "-m", `tq: create task ${id}`], env),
-      { env },
-    );
-    await pushTasksRepository(options.tasksDir, env);
   }
 
   return { id, path: taskPath, frontmatter, description };
@@ -958,31 +940,13 @@ export async function updateTask(options: UpdateTaskOptions) {
 
   if (!options.skipGit) {
     await prepareTasksRepository(options.tasksDir, env);
-    const staged = await runGitCommand(
-      options.tasksDir,
-      ["diff", "--cached", "--name-only"],
-      { env },
-    );
-    if (staged.stdout.trim()) {
-      throw new Error(
-        "Tasks repository has staged changes. Commit or unstage them before updating a task.",
-      );
-    }
+    await ensureNoStagedChanges(options.tasksDir, env, "updating");
   }
 
   const task = await loadTaskById(options.tasksDir, id);
 
   if (!options.skipGit) {
-    const status = await runGitCommand(
-      options.tasksDir,
-      ["status", "--porcelain", "--", `${id}.md`],
-      { env },
-    );
-    if (status.stdout.trim()) {
-      throw new Error(
-        `Task ${id} has uncommitted changes. Commit or discard them before updating.`,
-      );
-    }
+    await ensureTaskFileClean(options.tasksDir, id, env, "updating");
   }
   const updatedFrontmatter = {
     ...task.frontmatter,
@@ -1016,23 +980,14 @@ export async function updateTask(options: UpdateTaskOptions) {
 
   if (!options.skipGit) {
     const fileName = `${id}.md`;
-    await runGitCommand(options.tasksDir, ["add", "--", fileName], {
-      env,
-    });
-    const staged = await runGitCommand(
-      options.tasksDir,
-      ["diff", "--cached", "--name-only"],
-      { env },
-    );
-    if (!staged.stdout.trim()) {
-      return { id, path: task.path, frontmatter: normalized, description };
+    if (await stageTaskFile(options.tasksDir, fileName, env)) {
+      await runGitCommand(
+        options.tasksDir,
+        withGitCommitIdentity(["commit", "-m", `tq: update task ${id}`], env),
+        { env },
+      );
+      await pushTasksRepository(options.tasksDir, env);
     }
-    await runGitCommand(
-      options.tasksDir,
-      withGitCommitIdentity(["commit", "-m", `tq: update task ${id}`], env),
-      { env },
-    );
-    await pushTasksRepository(options.tasksDir, env);
   }
 
   return { id, path: task.path, frontmatter: normalized, description };
@@ -1343,14 +1298,7 @@ async function loadTaskRecords(tasksDir: string): Promise<TaskRecord[]> {
   return tasks;
 }
 
-function matchesListFilter(value: string, filters: string[]) {
-  if (filters.length === 0) {
-    return true;
-  }
-  return filters.includes(value);
-}
-
-function matchesPriorityFilter(value: number, filters: number[]) {
+function matchesFilter<T>(value: T, filters: T[]) {
   if (filters.length === 0) {
     return true;
   }
@@ -1359,22 +1307,22 @@ function matchesPriorityFilter(value: number, filters: number[]) {
 
 function applyTaskFilters(task: TaskRecord, filters: TaskListFilters) {
   const { frontmatter } = task;
-  if (!matchesListFilter(frontmatter.name, filters.names)) {
+  if (!matchesFilter(frontmatter.name, filters.names)) {
     return false;
   }
-  if (!matchesListFilter(frontmatter.status, filters.statuses)) {
+  if (!matchesFilter(frontmatter.status, filters.statuses)) {
     return false;
   }
-  if (!matchesPriorityFilter(frontmatter.priority, filters.priorities)) {
+  if (!matchesFilter(frontmatter.priority, filters.priorities)) {
     return false;
   }
-  if (!matchesListFilter(frontmatter.claimed_by, filters.claimedBy)) {
+  if (!matchesFilter(frontmatter.claimed_by, filters.claimedBy)) {
     return false;
   }
-  if (!matchesListFilter(frontmatter.created_at, filters.createdAt)) {
+  if (!matchesFilter(frontmatter.created_at, filters.createdAt)) {
     return false;
   }
-  if (!matchesListFilter(frontmatter.updated_at, filters.updatedAt)) {
+  if (!matchesFilter(frontmatter.updated_at, filters.updatedAt)) {
     return false;
   }
   return true;
@@ -1442,19 +1390,22 @@ export function toTaskShowEntry(task: TaskRecord): TaskShowEntry {
   };
 }
 
-export function formatTaskListJson(entries: TaskListEntry[]) {
-  const normalized = entries.map((entry) => ({
+function normalizeTaskEntryClaimedBy<T extends { claimed_by: string }>(
+  entry: T,
+) {
+  return {
     ...entry,
     claimed_by: entry.claimed_by ? entry.claimed_by : null,
-  }));
+  };
+}
+
+export function formatTaskListJson(entries: TaskListEntry[]) {
+  const normalized = entries.map((entry) => normalizeTaskEntryClaimedBy(entry));
   return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
 export function formatTaskShowJson(entry: TaskShowEntry) {
-  const normalized = {
-    ...entry,
-    claimed_by: entry.claimed_by ? entry.claimed_by : null,
-  };
+  const normalized = normalizeTaskEntryClaimedBy(entry);
   return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
@@ -1507,7 +1458,6 @@ const statusColors: Record<TaskStatus, string> = {
 
 function formatTaskSummary(entry: TaskListEntry) {
   const useColor = shouldUseColor();
-  const claimed = entry.claimed_by ? entry.claimed_by : "-";
   const id = applyAnsi(entry.id, useColor, ansiCodes.gray);
   const name = applyAnsi(
     entry.name,
@@ -1795,9 +1745,32 @@ function readFlagValue(bucket: FlagBucket | undefined) {
   return bucket;
 }
 
-function parseFlagString(raw: FlagValue | undefined, label: string) {
+type ParseStringFlagOptions = {
+  allowEmpty?: boolean;
+  allowUndefined?: boolean;
+  trim?: boolean;
+};
+
+function parseStringFlag(
+  raw: FlagValue | undefined,
+  label: string,
+  options: ParseStringFlagOptions & { allowUndefined: true },
+): string | undefined;
+function parseStringFlag(
+  raw: FlagValue | undefined,
+  label: string,
+  options?: ParseStringFlagOptions,
+): string;
+function parseStringFlag(
+  raw: FlagValue | undefined,
+  label: string,
+  options: ParseStringFlagOptions = {},
+) {
   if (raw === undefined) {
-    return undefined;
+    if (options.allowUndefined) {
+      return undefined;
+    }
+    throw new Error(`${label} requires a value.`);
   }
   if (raw === true) {
     throw new Error(`${label} requires a value.`);
@@ -1805,7 +1778,11 @@ function parseFlagString(raw: FlagValue | undefined, label: string) {
   if (typeof raw !== "string") {
     throw new Error(`${label} must be a string.`);
   }
-  return raw;
+  const value = options.trim === false ? raw : raw.trim();
+  if (!options.allowEmpty && !value) {
+    throw new Error(`${label} cannot be empty.`);
+  }
+  return value;
 }
 
 function parseFlagPriority(raw: FlagValue | undefined) {
@@ -1841,26 +1818,8 @@ function collectFlagValues(bucket: FlagBucket | undefined) {
   return Array.isArray(bucket) ? bucket : [bucket];
 }
 
-function parseFilterString(
-  raw: FlagValue,
-  label: string,
-  options: { allowEmpty?: boolean } = {},
-) {
-  if (raw === true) {
-    throw new Error(`${label} requires a value.`);
-  }
-  if (typeof raw !== "string") {
-    throw new Error(`${label} must be a string.`);
-  }
-  const trimmed = raw.trim();
-  if (!options.allowEmpty && !trimmed) {
-    throw new Error(`${label} cannot be empty.`);
-  }
-  return trimmed;
-}
-
 function parseFilterTimestamp(raw: FlagValue, label: string) {
-  const value = parseFilterString(raw, label);
+  const value = parseStringFlag(raw, label);
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     throw new Error(`${label} must be a valid ISO 8601 timestamp.`);
@@ -1890,9 +1849,6 @@ function parseFilterPriority(raw: FlagValue) {
 }
 
 function parseLongFlag(token: string, next: string | undefined) {
-  if (token === "--") {
-    return { name: "", value: "", consumedNext: false };
-  }
   const eqIndex = token.indexOf("=");
   const name = token.slice(2, eqIndex === -1 ? undefined : eqIndex);
   if (!name) {
@@ -1994,10 +1950,6 @@ export function parseArgs(args: string[]): ParsedArgs {
   return { command, flags, positionals };
 }
 
-export function formatHelp() {
-  return helpText;
-}
-
 function isHelpRequest(
   command: string | null,
   flags: Record<string, FlagBucket>,
@@ -2092,13 +2044,15 @@ function parseCreateFlags(parsed: ParsedArgs) {
   if (!positionalName) {
     throw new Error("Name is required for create.");
   }
-  const description = parseFlagString(
+  const description = parseStringFlag(
     readFlagValue(parsed.flags.description ?? parsed.flags.d),
     "Description",
+    { allowUndefined: true, allowEmpty: true, trim: false },
   );
-  const statusRaw = parseFlagString(
+  const statusRaw = parseStringFlag(
     readFlagValue(parsed.flags.status ?? parsed.flags.s),
     "Status",
+    { allowUndefined: true, allowEmpty: true, trim: false },
   );
   const priority = parseFlagPriority(
     readFlagValue(parsed.flags.priority ?? parsed.flags.p),
@@ -2159,17 +2113,20 @@ function parseUpdateFlags(parsed: ParsedArgs) {
     }
   }
 
-  const name = parseFlagString(
+  const name = parseStringFlag(
     readFlagValue(parsed.flags.name ?? parsed.flags.n),
     "Name",
+    { allowUndefined: true, allowEmpty: true, trim: false },
   );
-  const description = parseFlagString(
+  const description = parseStringFlag(
     readFlagValue(parsed.flags.description ?? parsed.flags.d),
     "Description",
+    { allowUndefined: true, allowEmpty: true, trim: false },
   );
-  const statusRaw = parseFlagString(
+  const statusRaw = parseStringFlag(
     readFlagValue(parsed.flags.status ?? parsed.flags.s),
     "Status",
+    { allowUndefined: true, allowEmpty: true, trim: false },
   );
   const priority = parseFlagPriority(
     readFlagValue(parsed.flags.priority ?? parsed.flags.p),
@@ -2248,13 +2205,13 @@ function parseListFlags(parsed: ParsedArgs) {
   const json = parseFlagBoolean(parsed.flags.json, "JSON output");
   const all = parseFlagBoolean(parsed.flags.all, "All statuses");
 
-  const names = nameValues.map((value) => parseFilterString(value, "Name"));
+  const names = nameValues.map((value) => parseStringFlag(value, "Name"));
   const statuses = statusValues.map((value) =>
-    parseStatusValue(parseFilterString(value, "Status")),
+    parseStatusValue(parseStringFlag(value, "Status")),
   );
   const priorities = priorityValues.map((value) => parseFilterPriority(value));
   const claimedBy = claimedValues.map((value) =>
-    parseFilterString(value, "Claimed by", { allowEmpty: true }),
+    parseStringFlag(value, "Claimed by", { allowEmpty: true }),
   );
   const createdAt = createdValues.map((value) =>
     parseFilterTimestamp(value, "Created at"),
