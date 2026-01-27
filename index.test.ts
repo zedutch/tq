@@ -6,12 +6,14 @@ import {
   createTask,
   updateTask,
   formatConfig,
+  formatTaskListJson,
   formatTaskMarkdown,
   commitTasksRepository,
   ensureGitRepository,
   generateTaskId,
   hasGitRemote,
   initWorkspace,
+  listTasks,
   loadConfig,
   normalizeConfig,
   parseTaskMarkdown,
@@ -23,6 +25,7 @@ import {
   resolveXdgConfigHome,
   resolveXdgDataHome,
   saveConfig,
+  toTaskListEntry,
 } from "./index";
 
 async function withTempEnv(
@@ -498,6 +501,170 @@ describe("task updates", () => {
           skipGit: true,
         }),
       ).rejects.toThrow("Invalid task id");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("task list", () => {
+  async function writeTask(
+    tasksDir: string,
+    id: string,
+    frontmatter: {
+      name: string;
+      created_at: string;
+      updated_at: string;
+      status: "open" | "in_progress" | "done" | "cancelled";
+      claimed_by: string;
+      priority: number;
+    },
+    description: string,
+  ) {
+    const content = formatTaskMarkdown(frontmatter, description);
+    await Bun.write(path.join(tasksDir, `${id}.md`), content);
+  }
+
+  test("filters across all fields with AND semantics", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
+    const createdAt = "2026-01-27T10:00:00.000Z";
+    const updatedAt = "2026-01-27T10:30:00.000Z";
+
+    try {
+      await writeTask(
+        tasksDir,
+        "a1b2",
+        {
+          name: "Alpha",
+          created_at: createdAt,
+          updated_at: updatedAt,
+          status: "open",
+          claimed_by: "",
+          priority: 1,
+        },
+        "First task",
+      );
+      await writeTask(
+        tasksDir,
+        "b2c3",
+        {
+          name: "Beta",
+          created_at: "2026-01-27T11:00:00.000Z",
+          updated_at: "2026-01-27T11:30:00.000Z",
+          status: "in_progress",
+          claimed_by: "robin",
+          priority: 2,
+        },
+        "Second task",
+      );
+
+      const filtered = await listTasks({
+        tasksDir,
+        filters: {
+          names: ["Alpha"],
+          statuses: ["open"],
+          priorities: [1],
+          claimedBy: [""],
+          createdAt: ["2026-01-27T10:00:00Z"],
+          updatedAt: ["2026-01-27T10:30:00Z"],
+        },
+      });
+
+      expect(filtered.map((task) => task.id)).toEqual(["a1b2"]);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("supports OR matching within a field", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
+
+    try {
+      await writeTask(
+        tasksDir,
+        "a1b2",
+        {
+          name: "Alpha",
+          created_at: "2026-01-27T10:00:00.000Z",
+          updated_at: "2026-01-27T10:00:00.000Z",
+          status: "open",
+          claimed_by: "",
+          priority: 1,
+        },
+        "First task",
+      );
+      await writeTask(
+        tasksDir,
+        "b2c3",
+        {
+          name: "Beta",
+          created_at: "2026-01-27T11:00:00.000Z",
+          updated_at: "2026-01-27T11:00:00.000Z",
+          status: "in_progress",
+          claimed_by: "robin",
+          priority: 2,
+        },
+        "Second task",
+      );
+      await writeTask(
+        tasksDir,
+        "c3d4",
+        {
+          name: "Gamma",
+          created_at: "2026-01-27T12:00:00.000Z",
+          updated_at: "2026-01-27T12:00:00.000Z",
+          status: "open",
+          claimed_by: "sam",
+          priority: 1,
+        },
+        "Third task",
+      );
+
+      const filtered = await listTasks({
+        tasksDir,
+        filters: {
+          statuses: ["open", "in_progress"],
+          priorities: [1],
+        },
+      });
+
+      expect(filtered.map((task) => task.id)).toEqual(["a1b2", "c3d4"]);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("formats JSON output with list entries", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
+
+    try {
+      await writeTask(
+        tasksDir,
+        "a1b2",
+        {
+          name: "Alpha",
+          created_at: "2026-01-27T10:00:00.000Z",
+          updated_at: "2026-01-27T10:00:00.000Z",
+          status: "open",
+          claimed_by: "",
+          priority: 1,
+        },
+        "First task",
+      );
+
+      const tasks = await listTasks({ tasksDir });
+      const entries = tasks.map(toTaskListEntry);
+      const json = formatTaskListJson(entries);
+      const parsed = JSON.parse(json) as Array<Record<string, unknown>>;
+
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0]).toMatchObject({
+        id: "a1b2",
+        name: "Alpha",
+        status: "open",
+        priority: 1,
+        claimed_by: "",
+      });
     } finally {
       await rm(tasksDir, { recursive: true, force: true });
     }

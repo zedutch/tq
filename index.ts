@@ -967,6 +967,141 @@ export async function updateTask(options: UpdateTaskOptions) {
   return { id, path: task.path, frontmatter: normalized, description };
 }
 
+type TaskRecord = {
+  id: string;
+  frontmatter: TaskFrontmatter;
+  description: string;
+};
+
+export type TaskListEntry = {
+  id: string;
+  name: string;
+  status: TaskStatus;
+  priority: number;
+  claimed_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type TaskListFilters = {
+  names: string[];
+  statuses: TaskStatus[];
+  priorities: number[];
+  claimedBy: string[];
+  createdAt: string[];
+  updatedAt: string[];
+};
+
+function ensureTasksDir(tasksDir: string) {
+  if (!tasksDir.trim()) {
+    throw new Error("Tasks directory is required.");
+  }
+}
+
+async function loadTaskRecords(tasksDir: string): Promise<TaskRecord[]> {
+  ensureTasksDir(tasksDir);
+  if (!(await isDirectory(tasksDir))) {
+    throw new Error(
+      `Tasks directory not initialized at ${tasksDir}. Run "tq init" first.`,
+    );
+  }
+  const entries = await readdir(tasksDir, { withFileTypes: true });
+  const tasks: TaskRecord[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) {
+      continue;
+    }
+    const id = entry.name.slice(0, -3);
+    if (!/^[a-z0-9]{4}$/.test(id)) {
+      continue;
+    }
+    const contents = await Bun.file(path.join(tasksDir, entry.name)).text();
+    try {
+      const parsed = parseTaskMarkdown(contents);
+      tasks.push({ id, ...parsed });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid task ${entry.name}: ${message}`);
+    }
+  }
+  tasks.sort((left, right) => left.id.localeCompare(right.id));
+  return tasks;
+}
+
+function matchesListFilter(value: string, filters: string[]) {
+  if (filters.length === 0) {
+    return true;
+  }
+  return filters.includes(value);
+}
+
+function matchesPriorityFilter(value: number, filters: number[]) {
+  if (filters.length === 0) {
+    return true;
+  }
+  return filters.includes(value);
+}
+
+function applyTaskFilters(task: TaskRecord, filters: TaskListFilters) {
+  const { frontmatter } = task;
+  if (!matchesListFilter(frontmatter.name, filters.names)) {
+    return false;
+  }
+  if (!matchesListFilter(frontmatter.status, filters.statuses)) {
+    return false;
+  }
+  if (!matchesPriorityFilter(frontmatter.priority, filters.priorities)) {
+    return false;
+  }
+  if (!matchesListFilter(frontmatter.claimed_by, filters.claimedBy)) {
+    return false;
+  }
+  if (!matchesListFilter(frontmatter.created_at, filters.createdAt)) {
+    return false;
+  }
+  if (!matchesListFilter(frontmatter.updated_at, filters.updatedAt)) {
+    return false;
+  }
+  return true;
+}
+
+export async function listTasks(options: {
+  tasksDir: string;
+  filters?: Partial<TaskListFilters>;
+}) {
+  const tasks = await loadTaskRecords(options.tasksDir);
+  const filters: TaskListFilters = {
+    names: options.filters?.names ?? [],
+    statuses: options.filters?.statuses ?? [],
+    priorities: options.filters?.priorities ?? [],
+    claimedBy: options.filters?.claimedBy ?? [],
+    createdAt: normalizeTimestampFilterValues(options.filters?.createdAt ?? []),
+    updatedAt: normalizeTimestampFilterValues(options.filters?.updatedAt ?? []),
+  };
+  return tasks.filter((task) => applyTaskFilters(task, filters));
+}
+
+export function toTaskListEntry(task: TaskRecord): TaskListEntry {
+  return {
+    id: task.id,
+    name: task.frontmatter.name,
+    status: task.frontmatter.status,
+    priority: task.frontmatter.priority,
+    claimed_by: task.frontmatter.claimed_by,
+    created_at: task.frontmatter.created_at,
+    updated_at: task.frontmatter.updated_at,
+  };
+}
+
+export function formatTaskListJson(entries: TaskListEntry[]) {
+  return `${JSON.stringify(entries, null, 2)}\n`;
+}
+
+function formatTaskSummary(entry: TaskListEntry) {
+  const claimed = entry.claimed_by ? entry.claimed_by : "-";
+  return `${entry.id} ${entry.name} [${entry.status}] p${entry.priority} ${claimed}`;
+}
+
 type ParsedArgs = {
   command: string | null;
   flags: Record<string, FlagBucket>;
@@ -1025,6 +1160,21 @@ Update options:
   -d <text>         task description
   -s <status>       open, in_progress, done, cancelled
   -p <0-4>          task priority
+
+List options:
+  -n <text>         filter by name (repeatable)
+  -s <status>       filter by status (repeatable)
+  -p <0-4>          filter by priority (repeatable)
+  -c <name>         filter by claimed_by (repeatable)
+  -C <timestamp>    filter by created_at (repeatable)
+  -U <timestamp>    filter by updated_at (repeatable)
+  --name <text>      long form for -n
+  --status <status>  long form for -s
+  --priority <0-4>   long form for -p
+  --claimed-by <t>   long form for -c
+  --created-at <t>   long form for -C
+  --updated-at <t>   long form for -U
+  --json            emit JSON output
 `;
 
 function addFlag(
@@ -1075,6 +1225,77 @@ function parseFlagPriority(raw: FlagValue | undefined) {
     throw new Error("Priority requires a value.");
   }
   return normalizePriority(raw);
+}
+
+function parseFlagBoolean(raw: FlagBucket | undefined, label: string) {
+  if (raw === undefined) {
+    return false;
+  }
+  if (Array.isArray(raw)) {
+    if (raw.some((value) => value !== true)) {
+      throw new Error(`${label} does not take a value.`);
+    }
+    return true;
+  }
+  if (raw === true) {
+    return true;
+  }
+  throw new Error(`${label} does not take a value.`);
+}
+
+function collectFlagValues(bucket: FlagBucket | undefined) {
+  if (bucket === undefined) {
+    return [];
+  }
+  return Array.isArray(bucket) ? bucket : [bucket];
+}
+
+function parseFilterString(
+  raw: FlagValue,
+  label: string,
+  options: { allowEmpty?: boolean } = {},
+) {
+  if (raw === true) {
+    throw new Error(`${label} requires a value.`);
+  }
+  if (typeof raw !== "string") {
+    throw new Error(`${label} must be a string.`);
+  }
+  const trimmed = raw.trim();
+  if (!options.allowEmpty && !trimmed) {
+    throw new Error(`${label} cannot be empty.`);
+  }
+  return trimmed;
+}
+
+function parseFilterTimestamp(raw: FlagValue, label: string) {
+  const value = parseFilterString(raw, label);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${label} must be a valid ISO 8601 timestamp.`);
+  }
+  return parsed.toISOString();
+}
+
+function normalizeTimestampFilterValues(values: string[]) {
+  return values.map((value) => {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error("Timestamp filters must be valid ISO 8601 strings.");
+    }
+    return parsed.toISOString();
+  });
+}
+
+function parseFilterPriority(raw: FlagValue) {
+  const priority = parseFlagPriority(raw);
+  if (priority === undefined) {
+    throw new Error("Priority requires a value.");
+  }
+  if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
+    throw new Error("Priority must be an integer from 0 to 4.");
+  }
+  return priority;
 }
 
 function parseLongFlag(token: string, next: string | undefined) {
@@ -1405,6 +1626,91 @@ async function handleUpdateCommand(parsed: ParsedArgs) {
   }
 }
 
+function parseListFlags(parsed: ParsedArgs) {
+  if (parsed.positionals.length > 0) {
+    throw new Error("list does not accept positional arguments.");
+  }
+  const nameValues = collectFlagValues(parsed.flags.n ?? parsed.flags.name);
+  const statusValues = collectFlagValues(parsed.flags.s ?? parsed.flags.status);
+  const priorityValues = collectFlagValues(
+    parsed.flags.p ?? parsed.flags.priority,
+  );
+  const claimedValues = collectFlagValues(
+    parsed.flags.c ?? parsed.flags["claimed-by"] ?? parsed.flags.claimed_by,
+  );
+  const createdValues = collectFlagValues(
+    parsed.flags.C ?? parsed.flags["created-at"] ?? parsed.flags.created_at,
+  );
+  const updatedValues = collectFlagValues(
+    parsed.flags.U ?? parsed.flags["updated-at"] ?? parsed.flags.updated_at,
+  );
+  const json = parseFlagBoolean(parsed.flags.json, "JSON output");
+
+  const names = nameValues.map((value) => parseFilterString(value, "Name"));
+  const statuses = statusValues.map((value) =>
+    parseStatusValue(parseFilterString(value, "Status")),
+  );
+  const priorities = priorityValues.map((value) => parseFilterPriority(value));
+  const claimedBy = claimedValues.map((value) =>
+    parseFilterString(value, "Claimed by", { allowEmpty: true }),
+  );
+  const createdAt = createdValues.map((value) =>
+    parseFilterTimestamp(value, "Created at"),
+  );
+  const updatedAt = updatedValues.map((value) =>
+    parseFilterTimestamp(value, "Updated at"),
+  );
+
+  return {
+    json,
+    filters: {
+      names,
+      statuses: statuses.filter(
+        (value): value is TaskStatus => value !== undefined,
+      ),
+      priorities,
+      claimedBy,
+      createdAt,
+      updatedAt,
+    },
+  };
+}
+
+async function handleListCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseListFlags>;
+  try {
+    input = parseListFlags(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const tasks = await listTasks({
+      tasksDir: resolved.tasksDir,
+      filters: input.filters,
+    });
+    const entries = tasks.map(toTaskListEntry);
+    if (input.json) {
+      console.log(formatTaskListJson(entries).trimEnd());
+    } else if (entries.length > 0) {
+      console.log(entries.map(formatTaskSummary).join("\n"));
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
@@ -1425,6 +1731,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "update") {
     return handleUpdateCommand(parsed);
+  }
+  if (parsed.command === "list") {
+    return handleListCommand(parsed);
   }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }

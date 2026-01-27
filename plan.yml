@@ -90,7 +90,7 @@
     - Provide a `--json` flag that emits a structured array for automation.
     - Use a deterministic ordering to keep output stable across runs.
     - Update `README.md` with `tq list` filters and output examples.
-  done: false
+  done: true
 - category: functional
   description: Implement `tq show` to display full task details with optional JSON.
   steps:
@@ -129,4 +129,12 @@
     - Write tests for `--json` output schemas for list and show.
     - Run `bun test` to verify everything passes.
     - Update `README.md` if any testing or usage notes change.
+  done: false
+
+- category: scaffolding
+  description: Add an ESLint configuration so lint checks can run.
+  steps:
+    - Decide on a minimal ESLint config compatible with Bun + TypeScript.
+    - Add the config file at the repo root.
+    - Document the lint command in the README if needed.
   done: false
