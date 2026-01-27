@@ -26,7 +26,7 @@
     - Ensure global mode never creates `.tasks` or other tq files inside the project repo.
     - Provide clear errors when a global workspace is not registered.
     - Update `README.md` to explain local vs global resolution rules.
-  done: false
+  done: true
 - category: workspace
   description: Implement `tq init` to register workspaces and create the tasks directory.
   steps:

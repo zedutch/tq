@@ -1,4 +1,4 @@
-import { mkdir, rename } from "node:fs/promises";
+import { mkdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -128,9 +128,9 @@ export function formatConfig(config: TqConfig) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-export async function loadConfig() {
+export async function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   assertSupportedPlatform();
-  const configPath = resolveConfigPath();
+  const configPath = resolveConfigPath(env);
   const file = Bun.file(configPath);
   if (!(await file.exists())) {
     return createDefaultConfig();
@@ -146,9 +146,12 @@ export async function loadConfig() {
   }
 }
 
-export async function saveConfig(config: TqConfig) {
+export async function saveConfig(
+  config: TqConfig,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   assertSupportedPlatform();
-  const configPath = resolveConfigPath();
+  const configPath = resolveConfigPath(env);
   const content = formatConfig(config);
   await mkdir(path.dirname(configPath), { recursive: true });
 
@@ -171,6 +174,61 @@ export function resolveMachineName(
   throw new Error(
     "Unable to resolve machine name. Set machine.name in config or define USER/LOGNAME.",
   );
+}
+
+type WorkspaceMode = "local" | "global";
+
+export type ResolvedWorkspace = {
+  mode: WorkspaceMode;
+  workspacePath: string;
+  tasksDir: string;
+  workspaceId?: string;
+};
+
+async function isDirectory(targetPath: string) {
+  try {
+    return (await stat(targetPath)).isDirectory();
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export async function resolveTasksDirectory(
+  workspacePath = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ResolvedWorkspace> {
+  const resolvedWorkspacePath = path.resolve(workspacePath);
+  const localTasksDir = path.join(resolvedWorkspacePath, ".tasks");
+  if (await isDirectory(localTasksDir)) {
+    return {
+      mode: "local",
+      workspacePath: resolvedWorkspacePath,
+      tasksDir: localTasksDir,
+    };
+  }
+
+  const config = await loadConfig(env);
+  const workspaceId = config.workspaces[resolvedWorkspacePath];
+  if (!workspaceId) {
+    throw new Error(
+      `Workspace not registered for global mode: ${resolvedWorkspacePath}. Run "tq init --mode global" first.`,
+    );
+  }
+
+  return {
+    mode: "global",
+    workspacePath: resolvedWorkspacePath,
+    tasksDir: path.join(resolveGlobalTasksBase(env), workspaceId),
+    workspaceId,
+  };
 }
 
 type ParsedArgs = {

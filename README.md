@@ -31,4 +31,8 @@ name = "workstation"
 
 If `machine.name` is omitted, `tq` falls back to `USER` or `LOGNAME` when claiming tasks.
 
+## Workspace resolution
+
+`tq` prefers local mode whenever a `.tasks` directory exists in the workspace root. If `.tasks` is missing, `tq` uses global mode and looks up the workspace id in the config before resolving the tasks directory under the global base path. If the workspace is not registered, `tq` reports an error and asks you to run `tq init --mode global`.
+
 This project was created using `bun init` in bun v1.3.4. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.

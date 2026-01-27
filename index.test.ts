@@ -9,6 +9,7 @@ import {
   resolveConfigPath,
   resolveGlobalTasksBase,
   resolveMachineName,
+  resolveTasksDirectory,
   resolveXdgConfigHome,
   resolveXdgDataHome,
   saveConfig,
@@ -128,5 +129,63 @@ describe("config helpers", () => {
       },
     );
     expect(fromEnv).toBe("fallback");
+  });
+});
+
+describe("workspace resolution", () => {
+  test("prefers local tasks directory when present", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
+    const localTasks = path.join(workspace, ".tasks");
+    await mkdir(localTasks, { recursive: true });
+
+    try {
+      const resolved = await resolveTasksDirectory(workspace);
+      expect(resolved).toEqual({
+        mode: "local",
+        workspacePath: path.resolve(workspace),
+        tasksDir: localTasks,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves global workspace directory when registered", async () => {
+    await withTempEnv(async () => {
+      const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
+      const workspaceId = "a1b2";
+      await saveConfig({
+        machine: {},
+        workspaces: {
+          [path.resolve(workspace)]: workspaceId,
+        },
+      });
+
+      try {
+        const resolved = await resolveTasksDirectory(workspace);
+        expect(resolved).toEqual({
+          mode: "global",
+          workspacePath: path.resolve(workspace),
+          tasksDir: path.join(resolveGlobalTasksBase(), workspaceId),
+          workspaceId,
+        });
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("errors when global workspace is not registered", async () => {
+    await withTempEnv(async () => {
+      const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
+
+      try {
+        await expect(resolveTasksDirectory(workspace)).rejects.toThrow(
+          "Workspace not registered for global mode",
+        );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    });
   });
 });
