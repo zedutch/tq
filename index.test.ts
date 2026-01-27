@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   formatConfig,
   formatTaskMarkdown,
   generateTaskId,
+  initWorkspace,
   loadConfig,
   normalizeConfig,
   parseTaskMarkdown,
@@ -186,6 +187,60 @@ describe("workspace resolution", () => {
         await expect(resolveTasksDirectory(workspace)).rejects.toThrow(
           "Workspace not registered for global mode",
         );
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe("workspace init", () => {
+  test("initializes local mode without touching config", async () => {
+    await withTempEnv(async () => {
+      const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
+      const localTasks = path.join(workspace, ".tasks");
+
+      try {
+        const resolved = await initWorkspace({
+          mode: "local",
+          workspacePath: workspace,
+          initGit: false,
+        });
+
+        expect(resolved).toEqual({
+          mode: "local",
+          workspacePath: path.resolve(workspace),
+          tasksDir: localTasks,
+        });
+        expect((await stat(localTasks)).isDirectory()).toBe(true);
+        expect(await Bun.file(resolveConfigPath()).exists()).toBe(false);
+      } finally {
+        await rm(workspace, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("initializes global mode and registers workspace", async () => {
+    await withTempEnv(async () => {
+      const workspace = await mkdtemp(path.join(tmpdir(), "tq-workspace-"));
+      const resolvedWorkspacePath = path.resolve(workspace);
+
+      try {
+        const resolved = await initWorkspace({
+          mode: "global",
+          workspacePath: workspace,
+          initGit: false,
+        });
+
+        const config = await loadConfig();
+        expect(resolved.mode).toBe("global");
+        expect(resolved.workspacePath).toBe(resolvedWorkspacePath);
+        expect(resolved.workspaceId).toBeTruthy();
+        expect(config.workspaces[resolvedWorkspacePath]).toBe(
+          resolved.workspaceId,
+        );
+        expect((await stat(resolved.tasksDir)).isDirectory()).toBe(true);
+        await expect(stat(path.join(workspace, ".tasks"))).rejects.toThrow();
       } finally {
         await rm(workspace, { recursive: true, force: true });
       }

@@ -36,7 +36,7 @@
     - Persist the global workspace entry (path and id) in the TOML config.
     - Initialize the tasks directory with git using the shared repo helper.
     - Update `README.md` with `tq init` usage and behavior.
-  done: false
+  done: true
 - category: git
   description: Manage the tasks repository with git and keep changes synced when a remote is configured.
   steps:

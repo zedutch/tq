@@ -35,6 +35,10 @@ If `machine.name` is omitted, `tq` falls back to `USER` or `LOGNAME` when claimi
 
 `tq` prefers local mode whenever a `.tasks` directory exists in the workspace root. If `.tasks` is missing, `tq` uses global mode and looks up the workspace id in the config before resolving the tasks directory under the global base path. If the workspace is not registered, `tq` reports an error and asks you to run `tq init --mode global`.
 
+## Initialization
+
+Use `tq init` to set up task storage for the current workspace. By default it uses local mode and creates a `.tasks` directory in the workspace. Use `tq init --mode global` to register the workspace in the config and create its tasks directory under the global data path. Global mode does not create `.tasks` in the project repo.
+
 ## Task format
 
 Each task is a Markdown file named `<id>.md`, where the id is 4 lowercase alphanumeric characters (`[a-z0-9]`). Task metadata lives in a frontmatter block at the top of the file, followed by the task description.

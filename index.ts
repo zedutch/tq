@@ -448,6 +448,91 @@ export async function resolveTasksDirectory(
   };
 }
 
+type InitWorkspaceOptions = {
+  mode?: WorkspaceMode;
+  workspacePath?: string;
+  env?: NodeJS.ProcessEnv;
+  initGit?: boolean;
+};
+
+async function ensureGitRepository(tasksDir: string, initGit = true) {
+  if (!initGit) {
+    return;
+  }
+  const gitDir = path.join(tasksDir, ".git");
+  if (await isDirectory(gitDir)) {
+    return;
+  }
+  try {
+    await Bun.$`git -C ${tasksDir} init`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to initialize git repo in ${tasksDir}: ${message}`);
+  }
+}
+
+async function generateWorkspaceId(
+  existingIds: ReadonlySet<string>,
+  baseDir: string,
+) {
+  const checked = new Set(existingIds);
+  const maxAttempts = 1000;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const candidate = generateTaskId(checked);
+    if (!(await isDirectory(path.join(baseDir, candidate)))) {
+      return candidate;
+    }
+    checked.add(candidate);
+  }
+  throw new Error("Unable to generate unique workspace id.");
+}
+
+export async function initWorkspace(
+  options: InitWorkspaceOptions = {},
+): Promise<ResolvedWorkspace> {
+  const mode = options.mode ?? "local";
+  const env = options.env ?? process.env;
+  const workspacePath = path.resolve(options.workspacePath ?? process.cwd());
+  const localTasksDir = path.join(workspacePath, ".tasks");
+
+  if (mode === "local") {
+    await mkdir(localTasksDir, { recursive: true });
+    await ensureGitRepository(localTasksDir, options.initGit ?? true);
+    return {
+      mode: "local",
+      workspacePath,
+      tasksDir: localTasksDir,
+    };
+  }
+
+  if (await isDirectory(localTasksDir)) {
+    throw new Error(
+      `Workspace already has a local .tasks directory at ${localTasksDir}. Remove it or run "tq init" without --mode global.`,
+    );
+  }
+
+  const config = await loadConfig(env);
+  let workspaceId = config.workspaces[workspacePath];
+  const baseDir = resolveGlobalTasksBase(env);
+  if (!workspaceId) {
+    const existingIds = new Set(Object.values(config.workspaces));
+    workspaceId = await generateWorkspaceId(existingIds, baseDir);
+    config.workspaces[workspacePath] = workspaceId;
+    await saveConfig(config, env);
+  }
+
+  const tasksDir = path.join(baseDir, workspaceId);
+  await mkdir(tasksDir, { recursive: true });
+  await ensureGitRepository(tasksDir, options.initGit ?? true);
+
+  return {
+    mode: "global",
+    workspacePath,
+    tasksDir,
+    workspaceId,
+  };
+}
+
 type ParsedArgs = {
   command: string | null;
   flags: Record<string, FlagBucket>;
@@ -486,6 +571,10 @@ Commands:
 
 Options:
   -h, --help  show help
+
+Init options:
+  --mode <local|global>  choose workspace mode (default: local)
+  -m <local|global>      shorthand for --mode
 `;
 
 function addFlag(
@@ -503,6 +592,16 @@ function addFlag(
     return;
   }
   flags[name] = [existing, value];
+}
+
+function readFlagValue(bucket: FlagBucket | undefined) {
+  if (bucket === undefined) {
+    return undefined;
+  }
+  if (Array.isArray(bucket)) {
+    return bucket[bucket.length - 1];
+  }
+  return bucket;
 }
 
 function parseLongFlag(token: string, next: string | undefined) {
@@ -625,7 +724,48 @@ function fail(message: string, includeHelp: boolean) {
   return 1;
 }
 
-function routeCommand(parsed: ParsedArgs) {
+function parseInitMode(flags: Record<string, FlagBucket>): WorkspaceMode {
+  const raw = readFlagValue(flags.mode ?? flags.m);
+  if (raw === undefined) {
+    return "local";
+  }
+  if (raw === true) {
+    throw new Error("Init mode requires a value: --mode local|global.");
+  }
+  if (typeof raw !== "string") {
+    throw new Error("Init mode must be a string: local or global.");
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "local" || normalized === "global") {
+    return normalized;
+  }
+  throw new Error(`Unsupported init mode "${raw}". Use local or global.`);
+}
+
+async function handleInitCommand(parsed: ParsedArgs) {
+  if (parsed.positionals.length > 0) {
+    return fail("init does not accept positional arguments.", true);
+  }
+  let mode: WorkspaceMode;
+  try {
+    mode = parseInitMode(parsed.flags);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+  try {
+    const resolved = await initWorkspace({ mode });
+    console.log(
+      `Initialized ${resolved.mode} workspace with tasks at ${resolved.tasksDir}.`,
+    );
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
+async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
     return 0;
@@ -637,13 +777,16 @@ function routeCommand(parsed: ParsedArgs) {
   if (!knownCommands.has(parsed.command)) {
     return fail(`Unknown command "${parsed.command}".`, true);
   }
+  if (parsed.command === "init") {
+    return handleInitCommand(parsed);
+  }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }
 
-export function runCli(argv = process.argv.slice(2)) {
+export async function runCli(argv = process.argv.slice(2)) {
   try {
     const parsed = parseArgs(argv);
-    return routeCommand(parsed);
+    return await routeCommand(parsed);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return fail(message, true);
@@ -651,6 +794,7 @@ export function runCli(argv = process.argv.slice(2)) {
 }
 
 if (import.meta.main) {
-  const exitCode = runCli();
-  process.exit(exitCode);
+  runCli().then((exitCode) => {
+    process.exit(exitCode);
+  });
 }
