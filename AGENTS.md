@@ -44,6 +44,45 @@ test("hello world", () => {
 });
 ```
 
+## Tasks
+
+Use `tq` itself for task tracking.
+Claim a task before starting to work on it using `tq claim <task-id>`
+Close the task once you're done working using `tq close <task-id>`
+Sometimes it might be necessary to edit or read the raw task file, you can find those in the `./.tasks` folder in this repo.
+
+### Essential `tq` commands
+
+```bash
+# Create a new task
+tq create "Add user authentication" --description="<description about what needs to be done and why>"
+
+# View all tasks that are ready to work on
+tq list
+
+# View all tasks that are ready to work on as json output
+tq list --json
+
+# View task details
+tq show <task-id>
+
+# View task details as json output
+tq show <task-id> --json
+
+# Claim a task
+tq claim <task-id>
+
+# Close a task (mark as 'completed')
+tq close <task-id>
+
+# Cancel a task
+tq cancel <task-id>
+
+# Update task
+tq update <issue-id> --status in_progress
+tq update <issue-id> --p 1
+```
+
 <!-- ## Frontend -->
 <!---->
 <!-- Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind. -->
