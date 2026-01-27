@@ -892,6 +892,16 @@ async function loadTaskById(tasksDir: string, id: string) {
   return { path: taskPath, ...parsed };
 }
 
+async function resolveTaskPath(tasksDir: string, id: string) {
+  assertValidTaskId(id);
+  const taskPath = path.join(tasksDir, `${id}.md`);
+  const file = Bun.file(taskPath);
+  if (!(await file.exists())) {
+    throw new Error(`Task ${id} not found.`);
+  }
+  return taskPath;
+}
+
 type UpdateTaskOptions = {
   tasksDir: string;
   id: string;
@@ -1474,6 +1484,7 @@ const knownCommands = new Set([
   "update",
   "list",
   "show",
+  "edit",
   "claim",
   "close",
   "cancel",
@@ -1486,6 +1497,7 @@ const helpText = `tq - task queue CLI
 Usage:
   tq <command> [options] [--] [args]
   tq create <name> [options]
+  tq edit <id>
   tq help [command]
 
 Commands:
@@ -1494,6 +1506,7 @@ Commands:
   update    update a task
   list      list tasks
   show      show task details
+  edit      edit a task in $EDITOR
   claim     claim a task
   close     close a task
   cancel    cancel a task
@@ -1601,6 +1614,14 @@ Usage:
 Options:
   --json     emit JSON output
   -h, --help show help for show
+`,
+  edit: `tq edit - edit a task in $EDITOR
+
+Usage:
+  tq edit <id>
+
+  Options:
+  -h, --help show help for edit
 `,
   claim: `tq claim - claim a task
 
@@ -2221,6 +2242,62 @@ function parseSingleIdCommand(parsed: ParsedArgs, label: string) {
   };
 }
 
+function parseEditorCommand(value: string) {
+  const input = value.trim();
+  if (!input) {
+    throw new Error("EDITOR is not set.");
+  }
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i] ?? "";
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (escaped) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("EDITOR contains an unterminated quote.");
+  }
+  if (current) {
+    args.push(current);
+  }
+  if (args.length === 0) {
+    throw new Error("EDITOR is not set.");
+  }
+  return args;
+}
+
 async function handleShowCommand(parsed: ParsedArgs) {
   let input: ReturnType<typeof parseShowFlags>;
   try {
@@ -2249,6 +2326,59 @@ async function handleShowCommand(parsed: ParsedArgs) {
       console.log(formatTaskDetails(entry));
     }
     return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
+async function handleEditCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseSingleIdCommand>;
+  try {
+    input = parseSingleIdCommand(parsed, "edit");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  if (!(await isDirectory(resolved.tasksDir))) {
+    return fail(
+      `Tasks directory not initialized at ${resolved.tasksDir}. Run "tq init" first.`,
+      false,
+    );
+  }
+
+  let taskPath: string;
+  try {
+    taskPath = await resolveTaskPath(resolved.tasksDir, input.id);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  let editorArgs: string[];
+  try {
+    editorArgs = parseEditorCommand(process.env.EDITOR ?? "");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const processResult = Bun.spawn([...editorArgs, taskPath], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    return await processResult.exited;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return fail(message, false);
@@ -2426,6 +2556,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "show") {
     return handleShowCommand(parsed);
+  }
+  if (parsed.command === "edit") {
+    return handleEditCommand(parsed);
   }
   if (parsed.command === "claim") {
     return handleClaimCommand(parsed);
