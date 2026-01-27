@@ -1377,11 +1377,19 @@ function applyTaskFilters(task: TaskRecord, filters: TaskListFilters) {
 export async function listTasks(options: {
   tasksDir: string;
   filters?: Partial<TaskListFilters>;
+  includeAllStatuses?: boolean;
 }) {
   const tasks = await loadTaskRecords(options.tasksDir);
+  const requestedStatuses = options.filters?.statuses ?? [];
+  const statuses: TaskStatus[] =
+    requestedStatuses.length > 0
+      ? requestedStatuses
+      : options.includeAllStatuses
+        ? []
+        : ["open"];
   const filters: TaskListFilters = {
     names: options.filters?.names ?? [],
-    statuses: options.filters?.statuses ?? [],
+    statuses,
     priorities: options.filters?.priorities ?? [],
     claimedBy: options.filters?.claimedBy ?? [],
     createdAt: normalizeTimestampFilterValues(options.filters?.createdAt ?? []),
@@ -1617,6 +1625,7 @@ List options:
   -c, --claimed-by <name>    filter by claimed_by (repeatable)
   -C, --created <timestamp>  filter by created_at (repeatable)
   -U, --updated <timestamp>  filter by updated_at (repeatable)
+  --all                      include all statuses
   --json                        emit JSON output
 `;
 
@@ -1668,10 +1677,13 @@ Options:
   -c, --claimed-by <name>    filter by claimed_by (repeatable)
   -C, --created <timestamp>  filter by created_at (repeatable)
   -U, --updated <timestamp>  filter by updated_at (repeatable)
+  --all                      include all statuses
   --json                     emit JSON output
   -h, --help                 show help for list
 
 Notes:
+  Defaults to open tasks when no status filter is provided.
+  Use --all to include every status.
   Timestamps must be ISO 8601 (e.g. 2025-01-05T12:34:56.000Z).
 `,
   show: `tq show - show task details
@@ -2218,6 +2230,7 @@ function parseListFlags(parsed: ParsedArgs) {
     parsed.flags.U ?? parsed.flags.updated,
   );
   const json = parseFlagBoolean(parsed.flags.json, "JSON output");
+  const all = parseFlagBoolean(parsed.flags.all, "All statuses");
 
   const names = nameValues.map((value) => parseFilterString(value, "Name"));
   const statuses = statusValues.map((value) =>
@@ -2236,6 +2249,7 @@ function parseListFlags(parsed: ParsedArgs) {
 
   return {
     json,
+    all,
     filters: {
       names,
       statuses: statuses.filter(
@@ -2270,6 +2284,7 @@ async function handleListCommand(parsed: ParsedArgs) {
     const tasks = await listTasks({
       tasksDir: resolved.tasksDir,
       filters: input.filters,
+      includeAllStatuses: input.all,
     });
     const entries = tasks.map(toTaskListEntry);
     if (input.json) {

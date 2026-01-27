@@ -683,6 +683,87 @@ describe("task claim/close/cancel", () => {
 });
 
 describe("task list", () => {
+  test("defaults to open tasks when status filter is omitted", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
+
+    try {
+      await writeTaskFile(
+        tasksDir,
+        "a1b2",
+        {
+          name: "Alpha",
+          created_at: "2026-01-27T10:00:00.000Z",
+          updated_at: "2026-01-27T10:00:00.000Z",
+          status: "open",
+          claimed_by: "",
+          priority: 1,
+        },
+        "First task",
+      );
+      await writeTaskFile(
+        tasksDir,
+        "b2c3",
+        {
+          name: "Beta",
+          created_at: "2026-01-27T11:00:00.000Z",
+          updated_at: "2026-01-27T11:00:00.000Z",
+          status: "in_progress",
+          claimed_by: "robin",
+          priority: 2,
+        },
+        "Second task",
+      );
+
+      const filtered = await listTasks({ tasksDir });
+
+      expect(filtered.map((task) => task.id)).toEqual(["a1b2"]);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("supports listing all statuses when includeAllStatuses is true", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
+
+    try {
+      await writeTaskFile(
+        tasksDir,
+        "a1b2",
+        {
+          name: "Alpha",
+          created_at: "2026-01-27T10:00:00.000Z",
+          updated_at: "2026-01-27T10:00:00.000Z",
+          status: "open",
+          claimed_by: "",
+          priority: 1,
+        },
+        "First task",
+      );
+      await writeTaskFile(
+        tasksDir,
+        "b2c3",
+        {
+          name: "Beta",
+          created_at: "2026-01-27T11:00:00.000Z",
+          updated_at: "2026-01-27T11:00:00.000Z",
+          status: "done",
+          claimed_by: "robin",
+          priority: 2,
+        },
+        "Second task",
+      );
+
+      const filtered = await listTasks({
+        tasksDir,
+        includeAllStatuses: true,
+      });
+
+      expect(filtered.map((task) => task.id)).toEqual(["a1b2", "b2c3"]);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
   test("filters across all fields with AND semantics", async () => {
     const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
     const createdAt = "2026-01-27T10:00:00.000Z";
@@ -821,7 +902,7 @@ describe("task list", () => {
         name: "Alpha",
         status: "open",
         priority: 1,
-        claimed_by: "",
+        claimed_by: null,
       });
     } finally {
       await rm(tasksDir, { recursive: true, force: true });
