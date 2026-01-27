@@ -185,6 +185,223 @@ export type ResolvedWorkspace = {
   workspaceId?: string;
 };
 
+export type TaskStatus = "open" | "in_progress" | "done" | "cancelled";
+
+export type TaskFrontmatter = {
+  name: string;
+  created_at: string;
+  updated_at: string;
+  status: TaskStatus;
+  claimed_by: string;
+  priority: number;
+};
+
+const taskFieldOrder: Array<keyof TaskFrontmatter> = [
+  "name",
+  "created_at",
+  "updated_at",
+  "status",
+  "claimed_by",
+  "priority",
+];
+
+const taskFieldSet = new Set(taskFieldOrder);
+
+const taskStatusSet = new Set<TaskStatus>([
+  "open",
+  "in_progress",
+  "done",
+  "cancelled",
+]);
+
+const taskIdAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+function isIsoTimestamp(value: string) {
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.toISOString() === value;
+}
+
+function parseFrontmatterValue(value: string): string | number {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return JSON.parse(trimmed) as string;
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1);
+  }
+  if (/^-?\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10);
+  }
+  return trimmed;
+}
+
+function normalizePriority(value: unknown, fallback = 2) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new Error("Invalid task: priority must be a number.");
+    }
+    if (!/^\d+$/.test(trimmed)) {
+      throw new Error("Invalid task: priority must be a number.");
+    }
+    return Number.parseInt(trimmed, 10);
+  }
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    throw new Error("Invalid task: priority must be a number.");
+  }
+  return value;
+}
+
+export function normalizeTaskFrontmatter(raw: Record<string, unknown>) {
+  const record: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!taskFieldSet.has(key as keyof TaskFrontmatter)) {
+      throw new Error(`Invalid task: unsupported frontmatter field "${key}".`);
+    }
+    if (key in record) {
+      throw new Error(`Invalid task: duplicate frontmatter field "${key}".`);
+    }
+    record[key] = value;
+  }
+
+  const name = record.name;
+  if (typeof name !== "string" || name.trim() === "") {
+    throw new Error("Invalid task: name is required.");
+  }
+
+  const createdAt = record.created_at;
+  if (typeof createdAt !== "string" || !isIsoTimestamp(createdAt)) {
+    throw new Error("Invalid task: created_at must be an ISO 8601 timestamp.");
+  }
+
+  const updatedAt = record.updated_at;
+  if (typeof updatedAt !== "string" || !isIsoTimestamp(updatedAt)) {
+    throw new Error("Invalid task: updated_at must be an ISO 8601 timestamp.");
+  }
+
+  const status = record.status;
+  if (typeof status !== "string" || status.trim() === "") {
+    throw new Error("Invalid task: status is required.");
+  }
+  if (!taskStatusSet.has(status as TaskStatus)) {
+    throw new Error(`Invalid task: status "${status}" is not supported.`);
+  }
+
+  const claimedBy = record.claimed_by;
+  if (typeof claimedBy !== "string") {
+    throw new Error("Invalid task: claimed_by must be a string.");
+  }
+
+  const priority = normalizePriority(record.priority);
+  if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
+    throw new Error("Invalid task: priority must be an integer from 0 to 4.");
+  }
+
+  return {
+    name: name.trim(),
+    created_at: createdAt,
+    updated_at: updatedAt,
+    status: status as TaskStatus,
+    claimed_by: claimedBy,
+    priority,
+  } satisfies TaskFrontmatter;
+}
+
+export function parseTaskMarkdown(text: string) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== "---") {
+    throw new Error("Invalid task: missing frontmatter header.");
+  }
+  const endIndex = lines.indexOf("---", 1);
+  if (endIndex === -1) {
+    throw new Error("Invalid task: missing frontmatter terminator.");
+  }
+
+  const rawFields: Record<string, unknown> = {};
+  for (const line of lines.slice(1, endIndex)) {
+    if (!line.trim()) {
+      continue;
+    }
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex === -1) {
+      throw new Error(`Invalid task: malformed frontmatter line "${line}".`);
+    }
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (!key) {
+      throw new Error(`Invalid task: malformed frontmatter line "${line}".`);
+    }
+    if (key in rawFields) {
+      throw new Error(`Invalid task: duplicate frontmatter field "${key}".`);
+    }
+    rawFields[key] = parseFrontmatterValue(value);
+  }
+
+  const frontmatter = normalizeTaskFrontmatter(rawFields);
+  const description = lines.slice(endIndex + 1).join("\n");
+  return { frontmatter, description };
+}
+
+export function formatTaskFrontmatter(frontmatter: TaskFrontmatter) {
+  const normalized = normalizeTaskFrontmatter(
+    frontmatter as Record<string, unknown>,
+  );
+  const lines: string[] = ["---"];
+  for (const key of taskFieldOrder) {
+    const value = normalized[key];
+    if (typeof value === "number") {
+      lines.push(`${key}: ${value}`);
+    } else {
+      lines.push(`${key}: ${JSON.stringify(value)}`);
+    }
+  }
+  lines.push("---");
+  return lines.join("\n");
+}
+
+export function formatTaskMarkdown(
+  frontmatter: TaskFrontmatter,
+  description: string,
+) {
+  const header = formatTaskFrontmatter(frontmatter);
+  if (!description) {
+    return `${header}\n`;
+  }
+  const body = description.replace(/\r\n/g, "\n");
+  return `${header}\n${body}`;
+}
+
+export function generateTaskId(
+  existingIds: ReadonlySet<string>,
+  options: {
+    randomBytes?: (length: number) => Uint8Array;
+    maxAttempts?: number;
+  } = {},
+) {
+  const randomBytes =
+    options.randomBytes ??
+    ((length: number) => crypto.getRandomValues(new Uint8Array(length)));
+  const maxAttempts = options.maxAttempts ?? 1000;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const bytes = randomBytes(4);
+    let id = "";
+    for (let i = 0; i < 4; i += 1) {
+      const value = bytes[i] ?? 0;
+      id += taskIdAlphabet[value % taskIdAlphabet.length];
+    }
+    if (!existingIds.has(id)) {
+      return id;
+    }
+  }
+  throw new Error("Unable to generate unique task id.");
+}
+
 async function isDirectory(targetPath: string) {
   try {
     return (await stat(targetPath)).isDirectory();

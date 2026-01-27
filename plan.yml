@@ -57,7 +57,7 @@
     - Generate 4-character alphanumeric ids and retry on collisions with existing tasks.
     - Keep file content as the task description to preserve markdown readability.
     - Update `README.md` with the task file format and id rules.
-  done: false
+  done: true
 - category: functional
   description: Implement `tq create` to add tasks with explicit metadata defaults.
   steps:

@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   formatConfig,
+  formatTaskMarkdown,
+  generateTaskId,
   loadConfig,
   normalizeConfig,
+  parseTaskMarkdown,
   resolveConfigPath,
   resolveGlobalTasksBase,
   resolveMachineName,
@@ -187,5 +190,116 @@ describe("workspace resolution", () => {
         await rm(workspace, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe("task model", () => {
+  test("parses frontmatter and defaults missing priority", () => {
+    const text = `---
+name: "Write tests"
+created_at: "2026-01-27T10:00:00.000Z"
+updated_at: "2026-01-27T10:00:00.000Z"
+status: "open"
+claimed_by: ""
+---
+Add tests for task parsing.`;
+
+    const parsed = parseTaskMarkdown(text);
+    expect(parsed.frontmatter.priority).toBe(2);
+    expect(parsed.description).toBe("Add tests for task parsing.");
+  });
+
+  test("rejects missing required fields", () => {
+    const text = `---
+created_at: "2026-01-27T10:00:00.000Z"
+updated_at: "2026-01-27T10:00:00.000Z"
+status: "open"
+claimed_by: ""
+priority: 2
+---
+Missing name.`;
+
+    expect(() => parseTaskMarkdown(text)).toThrow("name is required");
+  });
+
+  test("rejects duplicate frontmatter fields", () => {
+    const text = `---
+name: "Dupe"
+name: "Other"
+created_at: "2026-01-27T10:00:00.000Z"
+updated_at: "2026-01-27T10:00:00.000Z"
+status: "open"
+claimed_by: ""
+priority: 2
+---
+Duplicate name.`;
+
+    expect(() => parseTaskMarkdown(text)).toThrow(
+      "duplicate frontmatter field",
+    );
+  });
+
+  test("rejects priority outside allowed range", () => {
+    const text = `---
+name: "Out of range"
+created_at: "2026-01-27T10:00:00.000Z"
+updated_at: "2026-01-27T10:00:00.000Z"
+status: "open"
+claimed_by: ""
+priority: 9
+---
+Bad priority.`;
+
+    expect(() => parseTaskMarkdown(text)).toThrow(
+      "priority must be an integer",
+    );
+  });
+
+  test("rejects non-numeric priority strings", () => {
+    const text = `---
+name: "Bad priority"
+created_at: "2026-01-27T10:00:00.000Z"
+updated_at: "2026-01-27T10:00:00.000Z"
+status: "open"
+claimed_by: ""
+priority: 2foo
+---
+Bad priority.`;
+
+    expect(() => parseTaskMarkdown(text)).toThrow("priority must be a number");
+  });
+
+  test("formats frontmatter deterministically", () => {
+    const markdown = formatTaskMarkdown(
+      {
+        name: "Doc format",
+        created_at: "2026-01-27T10:00:00.000Z",
+        updated_at: "2026-01-27T10:00:00.000Z",
+        status: "open",
+        claimed_by: "",
+        priority: 2,
+      },
+      "Body text",
+    );
+
+    expect(markdown.startsWith("---\n")).toBe(true);
+    expect(markdown).toContain('name: "Doc format"');
+    expect(markdown).toContain("priority: 2");
+  });
+
+  test("generates ids and retries on collisions", () => {
+    const existing = new Set(["aaaa"]);
+    let calls = 0;
+    const randomBytes = (_length: number) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Uint8Array([0, 0, 0, 0]);
+      }
+      return new Uint8Array([1, 0, 0, 0]);
+    };
+
+    const id = generateTaskId(existing, { randomBytes, maxAttempts: 3 });
+    expect(id).toBe("baaa");
+    expect(calls).toBe(2);
   });
 });
