@@ -1561,6 +1561,7 @@ const knownCommands = new Set([
   "list",
   "show",
   "edit",
+  "where",
   "claim",
   "close",
   "cancel",
@@ -1583,6 +1584,7 @@ Commands:
   list      list tasks
   show      show task details
   edit      edit a task in $EDITOR
+  where     show tasks directory location
   claim     claim a task
   close     close a task
   cancel    cancel a task
@@ -1700,8 +1702,16 @@ Options:
 Usage:
   tq edit <id>
 
-  Options:
+Options:
   -h, --help show help for edit
+`,
+  where: `tq where - show tasks directory location
+
+Usage:
+  tq where
+
+Options:
+  -h, --help show help for where
 `,
   claim: `tq claim - claim a task
 
@@ -2485,6 +2495,30 @@ async function handleEditCommand(parsed: ParsedArgs) {
   }
 }
 
+async function handleWhereCommand(parsed: ParsedArgs) {
+  if (parsed.positionals.length > 0) {
+    return fail("where does not accept positional arguments.", true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  if (!(await isDirectory(resolved.tasksDir))) {
+    return fail(
+      `Tasks directory not initialized at ${resolved.tasksDir}. Run "tq init" first.`,
+      false,
+    );
+  }
+
+  console.log(resolved.tasksDir);
+  return 0;
+}
+
 async function handleClaimCommand(parsed: ParsedArgs) {
   let input: ReturnType<typeof parseSingleIdCommand>;
   try {
@@ -2659,6 +2693,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "edit") {
     return handleEditCommand(parsed);
+  }
+  if (parsed.command === "where") {
+    return handleWhereCommand(parsed);
   }
   if (parsed.command === "claim") {
     return handleClaimCommand(parsed);

@@ -49,7 +49,7 @@ test("hello world", () => {
 Use `tq` itself for task tracking.
 Claim a task before starting to work on it using `tq claim <task-id>`
 Close the task once you're done working using `tq close <task-id>`
-Sometimes it might be necessary to edit or read the raw task file, you can find those in the `./.tasks` folder in this repo.
+Sometimes it might be necessary to edit or read the raw task file, you can find those in the folder returned by `tq where`.
 
 ### Essential `tq` commands
 
