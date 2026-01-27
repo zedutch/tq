@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createTask,
+  updateTask,
   formatConfig,
   formatTaskMarkdown,
   commitTasksRepository,
@@ -404,6 +405,99 @@ describe("task creation", () => {
           skipGit: true,
         }),
       ).rejects.toThrow("Task name is required");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("task updates", () => {
+  test("updates selected fields and bumps updated_at", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-tasks-"));
+    const createdAt = new Date("2026-01-27T12:00:00.000Z");
+    const updatedAt = new Date("2026-01-27T13:00:00.000Z");
+
+    try {
+      const created = await createTask({
+        tasksDir,
+        name: "Initial",
+        description: "Original description",
+        now: createdAt,
+        skipGit: true,
+      });
+
+      const updated = await updateTask({
+        tasksDir,
+        id: created.id,
+        name: "Updated",
+        description: "New description",
+        status: "in_progress",
+        priority: 1,
+        now: updatedAt,
+        skipGit: true,
+      });
+
+      const contents = await Bun.file(updated.path).text();
+      const parsed = parseTaskMarkdown(contents);
+      expect(parsed.frontmatter.name).toBe("Updated");
+      expect(parsed.frontmatter.status).toBe("in_progress");
+      expect(parsed.frontmatter.priority).toBe(1);
+      expect(parsed.frontmatter.created_at).toBe(createdAt.toISOString());
+      expect(parsed.frontmatter.updated_at).toBe(updatedAt.toISOString());
+      expect(parsed.description).toBe("New description");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects updates when task file is dirty", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-tasks-"));
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "tq",
+      GIT_AUTHOR_EMAIL: "tq@example.com",
+      GIT_COMMITTER_NAME: "tq",
+      GIT_COMMITTER_EMAIL: "tq@example.com",
+    } as NodeJS.ProcessEnv;
+
+    try {
+      await ensureGitRepository(tasksDir, true, gitEnv);
+      const created = await createTask({
+        tasksDir,
+        name: "Dirty",
+        description: "Do not touch",
+        skipGit: false,
+        env: gitEnv,
+      });
+      const current = await Bun.file(created.path).text();
+      await Bun.write(created.path, `${current}\nextra`);
+
+      await expect(
+        updateTask({
+          tasksDir,
+          id: created.id,
+          name: "Attempt",
+          env: gitEnv,
+          skipGit: false,
+        }),
+      ).rejects.toThrow("uncommitted changes");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects invalid task ids", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-tasks-"));
+
+    try {
+      await expect(
+        updateTask({
+          tasksDir,
+          id: "toolong",
+          name: "Nope",
+          skipGit: true,
+        }),
+      ).rejects.toThrow("Invalid task id");
     } finally {
       await rm(tasksDir, { recursive: true, force: true });
     }

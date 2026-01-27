@@ -841,6 +841,132 @@ export async function createTask(options: CreateTaskOptions) {
   return { id, path: taskPath, frontmatter, description };
 }
 
+function assertValidTaskId(id: string) {
+  if (!/^[a-z0-9]{4}$/.test(id)) {
+    throw new Error(
+      `Invalid task id "${id}". Expected 4 lowercase alphanumeric characters.`,
+    );
+  }
+}
+
+async function loadTaskById(tasksDir: string, id: string) {
+  assertValidTaskId(id);
+  const taskPath = path.join(tasksDir, `${id}.md`);
+  const file = Bun.file(taskPath);
+  if (!(await file.exists())) {
+    throw new Error(`Task ${id} not found.`);
+  }
+  const contents = await file.text();
+  const parsed = parseTaskMarkdown(contents);
+  return { path: taskPath, ...parsed };
+}
+
+type UpdateTaskOptions = {
+  tasksDir: string;
+  id: string;
+  name?: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: number;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+};
+
+export async function updateTask(options: UpdateTaskOptions) {
+  const env = options.env ?? process.env;
+  const id = options.id.trim();
+  if (!id) {
+    throw new Error("Task id is required.");
+  }
+  if (!(await isDirectory(options.tasksDir))) {
+    throw new Error(
+      `Tasks directory not initialized at ${options.tasksDir}. Run "tq init" first.`,
+    );
+  }
+
+  if (!options.skipGit) {
+    await prepareTasksRepository(options.tasksDir, env);
+    const staged = await runGitCommand(
+      options.tasksDir,
+      ["diff", "--cached", "--name-only"],
+      { env },
+    );
+    if (staged.stdout.trim()) {
+      throw new Error(
+        "Tasks repository has staged changes. Commit or unstage them before updating a task.",
+      );
+    }
+  }
+
+  const task = await loadTaskById(options.tasksDir, id);
+
+  if (!options.skipGit) {
+    const status = await runGitCommand(
+      options.tasksDir,
+      ["status", "--porcelain", "--", `${id}.md`],
+      { env },
+    );
+    if (status.stdout.trim()) {
+      throw new Error(
+        `Task ${id} has uncommitted changes. Commit or discard them before updating.`,
+      );
+    }
+  }
+  const updatedFrontmatter = {
+    ...task.frontmatter,
+  };
+
+  if (options.name !== undefined) {
+    const trimmed = options.name.trim();
+    if (!trimmed) {
+      throw new Error("Task name is required.");
+    }
+    updatedFrontmatter.name = trimmed;
+  }
+
+  if (options.status !== undefined) {
+    updatedFrontmatter.status = options.status;
+  }
+
+  if (options.priority !== undefined) {
+    updatedFrontmatter.priority = options.priority;
+  }
+
+  updatedFrontmatter.updated_at = (options.now ?? new Date()).toISOString();
+
+  const description =
+    options.description !== undefined ? options.description : task.description;
+  const normalized = normalizeTaskFrontmatter(
+    updatedFrontmatter as Record<string, unknown>,
+  );
+  const content = formatTaskMarkdown(normalized, description);
+  await Bun.write(task.path, content);
+
+  if (!options.skipGit) {
+    const fileName = `${id}.md`;
+    await runGitCommand(options.tasksDir, ["add", "--", fileName], {
+      env,
+    });
+    const staged = await runGitCommand(
+      options.tasksDir,
+      ["diff", "--cached", "--name-only"],
+      { env },
+    );
+    if (!staged.stdout.trim()) {
+      return { id, path: task.path, frontmatter: normalized, description };
+    }
+    await runGitCommand(
+      options.tasksDir,
+      withGitCommitIdentity(["commit", "-m", `tq: update task ${id}`], env),
+      { env },
+    );
+    await pushTasksRepository(options.tasksDir, env);
+  }
+
+  return { id, path: task.path, frontmatter: normalized, description };
+}
+
 type ParsedArgs = {
   command: string | null;
   flags: Record<string, FlagBucket>;
@@ -893,6 +1019,12 @@ Create options:
   -d <text>             shorthand for --description
   -s <status>           shorthand for --status
   -p <0-4>              shorthand for --priority
+
+Update options:
+  -n <text>         task name
+  -d <text>         task description
+  -s <status>       open, in_progress, done, cancelled
+  -p <0-4>          task priority
 `;
 
 function addFlag(
@@ -1106,7 +1238,7 @@ async function handleInitCommand(parsed: ParsedArgs) {
   }
 }
 
-function parseCreateStatus(raw: string | undefined): TaskStatus | undefined {
+function parseStatusValue(raw: string | undefined): TaskStatus | undefined {
   if (raw === undefined) {
     return undefined;
   }
@@ -1153,7 +1285,7 @@ function parseCreateFlags(parsed: ParsedArgs) {
   return {
     name: nameRaw.trim(),
     description,
-    status: parseCreateStatus(statusRaw),
+    status: parseStatusValue(statusRaw),
     priority,
   };
 }
@@ -1191,6 +1323,88 @@ async function handleCreateCommand(parsed: ParsedArgs) {
   }
 }
 
+function parseUpdateFlags(parsed: ParsedArgs) {
+  if (parsed.positionals.length === 0) {
+    throw new Error("update requires a task id.");
+  }
+  if (parsed.positionals.length > 1) {
+    throw new Error("update accepts only one task id.");
+  }
+  const blockedFlags = ["created_at", "updated_at", "claimed_by"];
+  for (const flag of blockedFlags) {
+    if (flag in parsed.flags) {
+      throw new Error(`Flag "${flag}" is not allowed for update.`);
+    }
+  }
+
+  const name = parseFlagString(
+    readFlagValue(parsed.flags.name ?? parsed.flags.n),
+    "Name",
+  );
+  const description = parseFlagString(
+    readFlagValue(parsed.flags.description ?? parsed.flags.d),
+    "Description",
+  );
+  const statusRaw = parseFlagString(
+    readFlagValue(parsed.flags.status ?? parsed.flags.s),
+    "Status",
+  );
+  const priority = parseFlagPriority(
+    readFlagValue(parsed.flags.priority ?? parsed.flags.p),
+  );
+
+  if (
+    name === undefined &&
+    description === undefined &&
+    statusRaw === undefined &&
+    priority === undefined
+  ) {
+    throw new Error("update requires at least one field to change.");
+  }
+
+  return {
+    id: parsed.positionals[0] ?? "",
+    name,
+    description,
+    status: parseStatusValue(statusRaw),
+    priority,
+  };
+}
+
+async function handleUpdateCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseUpdateFlags>;
+  try {
+    input = parseUpdateFlags(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const updated = await updateTask({
+      tasksDir: resolved.tasksDir,
+      id: input.id,
+      name: input.name,
+      description: input.description,
+      status: input.status,
+      priority: input.priority,
+    });
+    console.log(updated.id);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
@@ -1208,6 +1422,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "create") {
     return handleCreateCommand(parsed);
+  }
+  if (parsed.command === "update") {
+    return handleUpdateCommand(parsed);
   }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }

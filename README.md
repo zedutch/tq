@@ -12,7 +12,7 @@ To run the CLI:
 bun run index.ts -- --help
 ```
 
-The CLI entrypoint is `tq`. `init` and `create` are available now; additional subcommands (like `list` and `show`) are planned.
+The CLI entrypoint is `tq`. `init`, `create`, and `update` are available now; additional subcommands (like `list` and `show`) are planned.
 
 ## Configuration
 
@@ -48,6 +48,14 @@ tq create --name "Add task filters" --description "Support filtering by status."
 ```
 
 `status` defaults to `open`, `priority` defaults to `2`, and `claimed_by` starts empty.
+
+## Updating tasks
+
+Use `tq update <id>` to change task metadata or replace the description. Only `name`, `status`, `priority`, and `description` can be edited.
+
+```bash
+tq update ab12 -s in_progress -p 1 -d "Start implementing filters"
+```
 
 ## Task repository
 

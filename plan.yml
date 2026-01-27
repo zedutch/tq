@@ -79,7 +79,7 @@
     - Update `updated_at` and write the task file back to disk.
     - Commit and push the change using the git helper when a remote is configured.
     - Update `README.md` with `tq update` usage and restrictions.
-  done: false
+  done: true
 - category: functional
   description: Implement `tq list` with filtering, summaries, and JSON output.
   steps:
