@@ -2270,8 +2270,8 @@ async function routeCommand(parsed: ParsedArgs) {
     return 0;
   }
   if (!parsed.command) {
-    console.error(helpText.trimEnd());
-    return 1;
+    console.log(helpText.trimEnd());
+    return 0;
   }
   if (!knownCommands.has(parsed.command)) {
     return fail(`Unknown command "${parsed.command}".`, true);
