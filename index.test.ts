@@ -20,7 +20,9 @@ import {
   listTasks,
   loadConfig,
   normalizeConfig,
+  parseArgs,
   parseTaskMarkdown,
+  runGitCommandPassthrough,
   runGitCommand,
   resolveConfigPath,
   resolveGlobalTasksBase,
@@ -87,6 +89,19 @@ describe("config paths", () => {
     expect(resolveXdgDataHome(env)).toBe("/tmp/custom-data");
     expect(resolveConfigPath(env)).toBe("/tmp/custom-config/tq/config.toml");
     expect(resolveGlobalTasksBase(env)).toBe("/tmp/custom-data/tq/tasks");
+  });
+});
+
+describe("arg parsing", () => {
+  test("treats git subcommand flags as positionals", () => {
+    const parsed = parseArgs(["git", "status", "-sb", "--untracked-files=no"]);
+    expect(parsed.command).toBe("git");
+    expect(parsed.flags).toEqual({});
+    expect(parsed.positionals).toEqual([
+      "status",
+      "-sb",
+      "--untracked-files=no",
+    ]);
   });
 });
 
@@ -964,6 +979,22 @@ describe("git helpers", () => {
     } finally {
       await rm(tasksDir, { recursive: true, force: true });
       await rm(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs git commands with passthrough mode", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-git-"));
+
+    try {
+      await ensureGitRepository(tasksDir, true, gitEnv);
+      const result = await runGitCommandPassthrough(tasksDir, ["status"], {
+        env: gitEnv,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
     }
   });
 });

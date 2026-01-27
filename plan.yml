@@ -119,7 +119,7 @@
     - Execute `git` with the provided arguments in that directory and stream the output.
     - Return the underlying exit code so callers can detect failures.
     - Update `README.md` with `tq git` usage and examples.
-  done: false
+  done: true
 - category: testing
   description: Add targeted tests to protect parsing, filtering, and output behavior.
   steps:

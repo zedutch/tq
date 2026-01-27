@@ -447,6 +447,13 @@ type GitCommandOptions = {
   allowFailure?: boolean;
 };
 
+type GitPassthroughOptions = {
+  env?: NodeJS.ProcessEnv;
+  stdout?: "inherit" | "pipe";
+  stderr?: "inherit" | "pipe";
+  stdin?: "inherit" | "pipe";
+};
+
 export async function runGitCommand(
   tasksDir: string,
   args: string[],
@@ -475,6 +482,23 @@ export async function runGitCommand(
     );
   }
   return result;
+}
+
+export async function runGitCommandPassthrough(
+  tasksDir: string,
+  args: string[],
+  options: GitPassthroughOptions = {},
+) {
+  const env = options.env ?? process.env;
+  const processResult = Bun.spawn(["git", ...args], {
+    cwd: tasksDir,
+    env,
+    stdin: options.stdin ?? "inherit",
+    stdout: options.stdout ?? "inherit",
+    stderr: options.stderr ?? "inherit",
+  });
+  const exitCode = await processResult.exited;
+  return { exitCode };
 }
 
 async function getGitRemotes(
@@ -1692,6 +1716,11 @@ export function parseArgs(args: string[]): ParsedArgs {
       break;
     }
 
+    if (command === "git") {
+      positionals.push(token, ...args.slice(i + 1));
+      break;
+    }
+
     if (token.startsWith("--")) {
       const parsed = parseLongFlag(token, args[i + 1]);
       if (parsed.name) {
@@ -2194,6 +2223,52 @@ async function handleCancelCommand(parsed: ParsedArgs) {
   }
 }
 
+async function handleGitCommand(parsed: ParsedArgs) {
+  if (parsed.positionals.length === 0) {
+    return fail("git requires a command to run.", true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  if (!(await isDirectory(resolved.tasksDir))) {
+    return fail(
+      `Tasks directory not initialized at ${resolved.tasksDir}. Run "tq init" first.`,
+      false,
+    );
+  }
+
+  const gitCheck = await runGitCommand(
+    resolved.tasksDir,
+    ["rev-parse", "--git-dir"],
+    {
+      allowFailure: true,
+    },
+  );
+  if (gitCheck.exitCode !== 0) {
+    return fail(
+      `Tasks directory at ${resolved.tasksDir} is not a git repository. Run "tq init" first.`,
+      false,
+    );
+  }
+
+  try {
+    const result = await runGitCommandPassthrough(
+      resolved.tasksDir,
+      parsed.positionals,
+    );
+    return result.exitCode;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
@@ -2229,6 +2304,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "cancel") {
     return handleCancelCommand(parsed);
+  }
+  if (parsed.command === "git") {
+    return handleGitCommand(parsed);
   }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }

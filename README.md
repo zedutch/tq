@@ -12,7 +12,7 @@ To run the CLI:
 bun run index.ts -- --help
 ```
 
-The CLI entrypoint is `tq`. `init`, `create`, `update`, `list`, `show`, `claim`, `close`, and `cancel` are available now.
+The CLI entrypoint is `tq`. `init`, `create`, `update`, `list`, `show`, `claim`, `close`, `cancel`, and `git` are available now.
 
 ## Configuration
 
@@ -114,6 +114,12 @@ tq cancel ab12
 ## Task repository
 
 Each tasks directory is a git repository. `tq` initializes the repo on first use, creates an initial commit, and records every task change with a concise commit message. If a remote is configured, `tq` pulls before mutating tasks and pushes after each successful commit.
+
+Use `tq git <args>` to run git commands inside the tasks repository:
+
+```bash
+tq git status -sb
+```
 
 ## Task format
 
