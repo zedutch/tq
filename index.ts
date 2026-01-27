@@ -983,6 +983,10 @@ export type TaskListEntry = {
   updated_at: string;
 };
 
+export type TaskShowEntry = TaskListEntry & {
+  description: string;
+};
+
 type TaskListFilters = {
   names: string[];
   statuses: TaskStatus[];
@@ -1081,6 +1085,25 @@ export async function listTasks(options: {
   return tasks.filter((task) => applyTaskFilters(task, filters));
 }
 
+export async function showTask(options: { tasksDir: string; id: string }) {
+  ensureTasksDir(options.tasksDir);
+  if (!(await isDirectory(options.tasksDir))) {
+    throw new Error(
+      `Tasks directory not initialized at ${options.tasksDir}. Run "tq init" first.`,
+    );
+  }
+  const taskId = options.id.trim();
+  if (!taskId) {
+    throw new Error("Task id is required.");
+  }
+  const task = await loadTaskById(options.tasksDir, taskId);
+  return toTaskShowEntry({
+    id: taskId,
+    frontmatter: task.frontmatter,
+    description: task.description,
+  });
+}
+
 export function toTaskListEntry(task: TaskRecord): TaskListEntry {
   return {
     id: task.id,
@@ -1093,13 +1116,47 @@ export function toTaskListEntry(task: TaskRecord): TaskListEntry {
   };
 }
 
+export function toTaskShowEntry(task: TaskRecord): TaskShowEntry {
+  return {
+    ...toTaskListEntry(task),
+    description: task.description,
+  };
+}
+
 export function formatTaskListJson(entries: TaskListEntry[]) {
   return `${JSON.stringify(entries, null, 2)}\n`;
+}
+
+export function formatTaskShowJson(entry: TaskShowEntry) {
+  return `${JSON.stringify(entry, null, 2)}\n`;
 }
 
 function formatTaskSummary(entry: TaskListEntry) {
   const claimed = entry.claimed_by ? entry.claimed_by : "-";
   return `${entry.id} ${entry.name} [${entry.status}] p${entry.priority} ${claimed}`;
+}
+
+function formatTaskDetails(entry: TaskShowEntry) {
+  const claimed = entry.claimed_by ? entry.claimed_by : "-";
+  const lines = [
+    `id: ${entry.id}`,
+    `name: ${entry.name}`,
+    `status: ${entry.status}`,
+    `priority: ${entry.priority}`,
+    `claimed_by: ${claimed}`,
+    `created_at: ${entry.created_at}`,
+    `updated_at: ${entry.updated_at}`,
+    "",
+    "description:",
+  ];
+
+  if (entry.description) {
+    lines.push(entry.description);
+  } else {
+    lines.push("(no description)");
+  }
+
+  return lines.join("\n");
 }
 
 type ParsedArgs = {
@@ -1160,6 +1217,9 @@ Update options:
   -d <text>         task description
   -s <status>       open, in_progress, done, cancelled
   -p <0-4>          task priority
+
+Show options:
+  --json            emit JSON output
 
 List options:
   -n <text>         filter by name (repeatable)
@@ -1711,6 +1771,54 @@ async function handleListCommand(parsed: ParsedArgs) {
   }
 }
 
+function parseShowFlags(parsed: ParsedArgs) {
+  if (parsed.positionals.length === 0) {
+    throw new Error("show requires a task id.");
+  }
+  if (parsed.positionals.length > 1) {
+    throw new Error("show accepts only one task id.");
+  }
+  const json = parseFlagBoolean(parsed.flags.json, "JSON output");
+  return {
+    id: parsed.positionals[0] ?? "",
+    json,
+  };
+}
+
+async function handleShowCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseShowFlags>;
+  try {
+    input = parseShowFlags(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const entry = await showTask({
+      tasksDir: resolved.tasksDir,
+      id: input.id,
+    });
+    if (input.json) {
+      console.log(formatTaskShowJson(entry).trimEnd());
+    } else {
+      console.log(formatTaskDetails(entry));
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
@@ -1734,6 +1842,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "list") {
     return handleListCommand(parsed);
+  }
+  if (parsed.command === "show") {
+    return handleShowCommand(parsed);
   }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }

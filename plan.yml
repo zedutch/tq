@@ -99,7 +99,7 @@
     - Provide a `--json` flag that emits a structured object for automation.
     - Return clear errors when a task id is missing or not found.
     - Update `README.md` with `tq show` usage and output format.
-  done: false
+  done: true
 - category: functional
   description: Implement `tq claim`, `tq close`, and `tq cancel` shortcuts.
   steps:

@@ -12,7 +12,7 @@ To run the CLI:
 bun run index.ts -- --help
 ```
 
-The CLI entrypoint is `tq`. `init`, `create`, `update`, and `list` are available now; additional subcommands (like `show`) are planned.
+The CLI entrypoint is `tq`. `init`, `create`, `update`, `list`, and `show` are available now; additional subcommands (like `claim`) are planned.
 
 ## Configuration
 
@@ -80,6 +80,20 @@ Use `--json` to emit structured output:
 
 ```bash
 tq list --json
+```
+
+## Showing tasks
+
+Use `tq show <id>` to display full task details, including the description.
+
+```bash
+tq show ab12
+```
+
+Use `--json` for structured output:
+
+```bash
+tq show ab12 --json
 ```
 
 ## Task repository
