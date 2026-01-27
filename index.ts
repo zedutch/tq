@@ -1486,6 +1486,7 @@ const helpText = `tq - task queue CLI
 Usage:
   tq <command> [options] [--] [args]
   tq create <name> [options]
+  tq help [command]
 
 Commands:
   init      initialize a workspace
@@ -1506,7 +1507,6 @@ Init options:
   -m,  --mode <local|global>  choose workspace mode (default: local)
 
 Create options:
-  -n, --name <text>         task name (or pass as positional)
   -d, --description <text>  task description
   -s, --status <status>     open, in_progress, done, cancelled
   -p, --priority <0-4>      task priority (default: 2)
@@ -1538,6 +1538,117 @@ List options:
   -U, --updated <timestamp>  filter by updated_at (repeatable)
   --json                        emit JSON output
 `;
+
+const helpByCommand: Record<string, string> = {
+  init: `tq init - initialize a workspace
+
+Usage:
+  tq init [options]
+
+Options:
+  -m, --mode <local|global>  choose workspace mode (default: local)
+  -h, --help                 show help for init
+`,
+  create: `tq create - create a task
+
+Usage:
+  tq create <name> [options]
+
+Options:
+  -d, --description <text>  task description (markdown)
+  -s, --status <status>     open | in_progress | done | cancelled (default: open)
+  -p, --priority <0-4>      task priority (default: 2)
+  -h, --help                show help for create
+`,
+  update: `tq update - update task fields
+
+Usage:
+  tq update <id> [options]
+
+Options:
+  -n, --name <text>         task name
+  -d, --description <text>  task description (markdown)
+  -s, --status <status>     open | in_progress | done | cancelled
+  -p, --priority <0-4>      task priority
+  -h, --help                show help for update
+
+Notes:
+  At least one of --name, --description, --status, or --priority is required.
+`,
+  list: `tq list - list tasks
+
+Usage:
+  tq list [options]
+
+Options:
+  -n, --name <text>          filter by name (repeatable)
+  -s, --status <status>      filter by status (repeatable)
+  -p, --priority <0-4>       filter by priority (repeatable)
+  -c, --claimed-by <name>    filter by claimed_by (repeatable)
+  -C, --created <timestamp>  filter by created_at (repeatable)
+  -U, --updated <timestamp>  filter by updated_at (repeatable)
+  --json                     emit JSON output
+  -h, --help                 show help for list
+
+Notes:
+  Timestamps must be ISO 8601 (e.g. 2025-01-05T12:34:56.000Z).
+`,
+  show: `tq show - show task details
+
+Usage:
+  tq show <id> [options]
+
+Options:
+  --json     emit JSON output
+  -h, --help show help for show
+`,
+  claim: `tq claim - claim a task
+
+Usage:
+  tq claim <id>
+
+Options:
+  -h, --help show help for claim
+`,
+  close: `tq close - close a task
+
+Usage:
+  tq close <id>
+
+Options:
+  -h, --help show help for close
+`,
+  cancel: `tq cancel - cancel a task
+
+Usage:
+  tq cancel <id>
+
+Options:
+  -h, --help show help for cancel
+`,
+  git: `tq git - run git in tasks repo
+
+Usage:
+  tq git <args...>
+
+Examples:
+  tq git status
+  tq git log --oneline
+
+Options:
+  -h, --help show help for git
+`,
+  help: `tq help - show help for a command
+
+Usage:
+  tq help [command]
+
+Examples:
+  tq help
+  tq help list
+  tq list --help
+`,
+};
 
 function addFlag(
   flags: Record<string, FlagBucket>,
@@ -1776,6 +1887,16 @@ function isHelpRequest(
   return command === "help" || flags.help === true || flags.h === true;
 }
 
+function resolveHelpTopic(parsed: ParsedArgs) {
+  if (parsed.command === "help") {
+    return parsed.positionals[0]?.trim() ?? "";
+  }
+  if (parsed.flags.help === true || parsed.flags.h === true) {
+    return parsed.command ?? "";
+  }
+  return "";
+}
+
 function fail(message: string, includeHelp: boolean) {
   console.error(`Error: ${message}`);
   if (includeHelp) {
@@ -1841,26 +1962,17 @@ function parseStatusValue(raw: string | undefined): TaskStatus | undefined {
 }
 
 function parseCreateFlags(parsed: ParsedArgs) {
-  if (parsed.positionals.length > 1) {
-    throw new Error("create accepts only one positional task name.");
-  }
-  const blockedFlags = ["created_at", "updated_at", "claimed_by"];
+  const blockedFlags = ["created_at", "updated_at", "claimed_by", "name", "n"];
   for (const flag of blockedFlags) {
     if (flag in parsed.flags) {
+      if (flag === "name" || flag === "n") {
+        throw new Error("create requires a positional name; --name is not supported.");
+      }
       throw new Error(`Flag "${flag}" is not allowed for create.`);
     }
   }
-
-  const nameRaw = parseFlagString(
-    readFlagValue(parsed.flags.name ?? parsed.flags.n),
-    "Name",
-  );
-  const positionalName = parsed.positionals[0]?.trim();
-  if (nameRaw && positionalName) {
-    throw new Error("Name provided twice. Use --name or a positional name.");
-  }
-  const resolvedName = nameRaw ?? positionalName;
-  if (!resolvedName || !resolvedName.trim()) {
+  const positionalName = parsed.positionals.join(" ").trim();
+  if (!positionalName) {
     throw new Error("Name is required for create.");
   }
   const description = parseFlagString(
@@ -1876,7 +1988,7 @@ function parseCreateFlags(parsed: ParsedArgs) {
   );
 
   return {
-    name: resolvedName.trim(),
+    name: positionalName,
     description,
     status: parseStatusValue(statusRaw),
     priority,
@@ -2281,6 +2393,15 @@ async function handleGitCommand(parsed: ParsedArgs) {
 
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
+    const topic = resolveHelpTopic(parsed);
+    if (topic) {
+      const commandHelp = helpByCommand[topic];
+      if (!commandHelp) {
+        return fail(`Unknown help topic "${topic}".`, true);
+      }
+      console.log(commandHelp.trimEnd());
+      return 0;
+    }
     console.log(helpText.trimEnd());
     return 0;
   }
