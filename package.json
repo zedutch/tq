@@ -1,12 +1,15 @@
 {
+  "$schema": "https://www.schemastore.org/package.json",
   "name": "tq",
   "module": "index.ts",
+  "version": "0.0.1",
   "type": "module",
   "bin": {
     "tq": "index.ts"
   },
   "scripts": {
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "build": "bun build ./index.ts --compile --outfile tq"
   },
   "private": true,
   "eslintConfig": {
