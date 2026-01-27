@@ -1470,6 +1470,7 @@ const helpText = `tq - task queue CLI
 
 Usage:
   tq <command> [options] [--] [args]
+  tq create <name> [options]
 
 Commands:
   init      initialize a workspace
@@ -1490,7 +1491,7 @@ Init options:
   -m,  --mode <local|global>  choose workspace mode (default: local)
 
 Create options:
-  -n, --name <text>         task name (required)
+  -n, --name <text>         task name (or pass as positional)
   -d, --description <text>  task description
   -s, --status <status>     open, in_progress, done, cancelled
   -p, --priority <0-4>      task priority (default: 2)
@@ -1825,8 +1826,8 @@ function parseStatusValue(raw: string | undefined): TaskStatus | undefined {
 }
 
 function parseCreateFlags(parsed: ParsedArgs) {
-  if (parsed.positionals.length > 0) {
-    throw new Error("create does not accept positional arguments.");
+  if (parsed.positionals.length > 1) {
+    throw new Error("create accepts only one positional task name.");
   }
   const blockedFlags = ["created_at", "updated_at", "claimed_by"];
   for (const flag of blockedFlags) {
@@ -1839,7 +1840,12 @@ function parseCreateFlags(parsed: ParsedArgs) {
     readFlagValue(parsed.flags.name ?? parsed.flags.n),
     "Name",
   );
-  if (!nameRaw || !nameRaw.trim()) {
+  const positionalName = parsed.positionals[0]?.trim();
+  if (nameRaw && positionalName) {
+    throw new Error("Name provided twice. Use --name or a positional name.");
+  }
+  const resolvedName = nameRaw ?? positionalName;
+  if (!resolvedName || !resolvedName.trim()) {
     throw new Error("Name is required for create.");
   }
   const description = parseFlagString(
@@ -1855,7 +1861,7 @@ function parseCreateFlags(parsed: ParsedArgs) {
   );
 
   return {
-    name: nameRaw.trim(),
+    name: resolvedName.trim(),
     description,
     status: parseStatusValue(statusRaw),
     priority,
