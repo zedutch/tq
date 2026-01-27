@@ -1,9 +1,15 @@
 import { mkdir, readdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import packageJson from "./package.json";
 
 type FlagValue = string | boolean;
 type FlagBucket = FlagValue | FlagValue[];
+
+const buildVersion =
+  typeof packageJson.version === "string" && packageJson.version.trim()
+    ? packageJson.version.trim()
+    : "unknown";
 
 type MachineConfig = {
   name?: string;
@@ -1593,6 +1599,7 @@ Commands:
 
 Options:
   -h, --help  show help
+  -v, --version  show version
 
 Init options:
   --stealth  store tasks in XDG data dir (no .tasks in this repo; use when you can't or won't ignore it)
@@ -1996,6 +2003,14 @@ function isHelpRequest(
   flags: Record<string, FlagBucket>,
 ) {
   return command === "help" || flags.help === true || flags.h === true;
+}
+
+function isVersionRequest(flags: Record<string, FlagBucket>) {
+  const bucket = flags.version ?? flags.v;
+  if (bucket === undefined) {
+    return false;
+  }
+  return parseFlagBoolean(bucket, "Version");
 }
 
 function resolveHelpTopic(parsed: ParsedArgs) {
@@ -2656,6 +2671,10 @@ async function handleGitCommand(parsed: ParsedArgs) {
 }
 
 async function routeCommand(parsed: ParsedArgs) {
+  if (isVersionRequest(parsed.flags)) {
+    console.log(buildVersion);
+    return 0;
+  }
   if (isHelpRequest(parsed.command, parsed.flags)) {
     const topic = resolveHelpTopic(parsed);
     if (topic) {
