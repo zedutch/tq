@@ -196,6 +196,7 @@ export type TaskStatus = "open" | "in_progress" | "done" | "cancelled";
 export type TaskFrontmatter = {
   name: string;
   created_at: string;
+  created_by: string;
   updated_at: string;
   status: TaskStatus;
   claimed_by: string;
@@ -207,6 +208,7 @@ const taskFieldOrder: Array<keyof TaskFrontmatter> = [
   "created_at",
   "updated_at",
   "status",
+  "created_by",
   "claimed_by",
   "priority",
 ];
@@ -299,6 +301,15 @@ export function normalizeTaskFrontmatter(raw: Record<string, unknown>) {
     throw new Error(`Invalid task: status "${status}" is not supported.`);
   }
 
+  const createdByRaw = record.created_by;
+  let createdBy = "";
+  if (createdByRaw !== undefined) {
+    if (typeof createdByRaw !== "string") {
+      throw new Error("Invalid task: created_by must be a string.");
+    }
+    createdBy = createdByRaw.trim();
+  }
+
   const claimedByRaw = record.claimed_by;
   let claimedBy = "";
   if (claimedByRaw !== undefined) {
@@ -316,6 +327,7 @@ export function normalizeTaskFrontmatter(raw: Record<string, unknown>) {
   return {
     name: name.trim(),
     created_at: createdAt,
+    created_by: createdBy,
     updated_at: updatedAt,
     status: status as TaskStatus,
     claimed_by: claimedBy,
@@ -365,7 +377,7 @@ export function formatTaskFrontmatter(frontmatter: TaskFrontmatter) {
   const lines: string[] = ["---"];
   for (const key of taskFieldOrder) {
     const value = normalized[key];
-    if (key === "claimed_by" && value === "") {
+    if ((key === "claimed_by" || key === "created_by") && value === "") {
       continue;
     }
     if (typeof value === "number") {
@@ -824,6 +836,8 @@ export async function createTask(options: CreateTaskOptions) {
     );
   }
 
+  const createdBy = resolveMachineName(await loadConfig(env), env);
+
   if (!options.skipGit) {
     await prepareTasksRepository(options.tasksDir, env);
     await ensureNoStagedChanges(options.tasksDir, env, "creating");
@@ -835,6 +849,7 @@ export async function createTask(options: CreateTaskOptions) {
   const frontmatter = normalizeTaskFrontmatter({
     name,
     created_at: timestamp,
+    created_by: createdBy,
     updated_at: timestamp,
     status: options.status ?? "open",
     claimed_by: "",
@@ -1244,6 +1259,7 @@ export type TaskListEntry = {
   name: string;
   status: TaskStatus;
   priority: number;
+  created_by: string;
   claimed_by: string;
   created_at: string;
   updated_at: string;
@@ -1377,6 +1393,7 @@ export function toTaskListEntry(task: TaskRecord): TaskListEntry {
     name: task.frontmatter.name,
     status: task.frontmatter.status,
     priority: task.frontmatter.priority,
+    created_by: task.frontmatter.created_by,
     claimed_by: task.frontmatter.claimed_by,
     created_at: task.frontmatter.created_at,
     updated_at: task.frontmatter.updated_at,
@@ -1390,22 +1407,23 @@ export function toTaskShowEntry(task: TaskRecord): TaskShowEntry {
   };
 }
 
-function normalizeTaskEntryClaimedBy<T extends { claimed_by: string }>(
-  entry: T,
-) {
+function normalizeTaskEntryAuthors<
+  T extends { claimed_by: string; created_by: string },
+>(entry: T) {
   return {
     ...entry,
+    created_by: entry.created_by ? entry.created_by : null,
     claimed_by: entry.claimed_by ? entry.claimed_by : null,
   };
 }
 
 export function formatTaskListJson(entries: TaskListEntry[]) {
-  const normalized = entries.map((entry) => normalizeTaskEntryClaimedBy(entry));
+  const normalized = entries.map((entry) => normalizeTaskEntryAuthors(entry));
   return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
 export function formatTaskShowJson(entry: TaskShowEntry) {
-  const normalized = normalizeTaskEntryClaimedBy(entry);
+  const normalized = normalizeTaskEntryAuthors(entry);
   return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
@@ -1482,12 +1500,14 @@ function formatTaskSummary(entry: TaskListEntry) {
 }
 
 function formatTaskDetails(entry: TaskShowEntry) {
+  const createdBy = entry.created_by ? entry.created_by : "-";
   const claimed = entry.claimed_by ? entry.claimed_by : "-";
   const lines = [
     `id: ${entry.id}`,
     `name: ${entry.name}`,
     `status: ${entry.status}`,
     `priority: ${entry.priority}`,
+    `created_by: ${createdBy}`,
     `claimed_by: ${claimed}`,
     `created_at: ${entry.created_at}`,
     `updated_at: ${entry.updated_at}`,
@@ -2031,7 +2051,15 @@ function parseStatusValue(raw: string | undefined): TaskStatus | undefined {
 }
 
 function parseCreateFlags(parsed: ParsedArgs) {
-  const blockedFlags = ["created_at", "updated_at", "claimed_by", "name", "n"];
+  const blockedFlags = [
+    "created_at",
+    "created_by",
+    "created-by",
+    "updated_at",
+    "claimed_by",
+    "name",
+    "n",
+  ];
   for (const flag of blockedFlags) {
     if (flag in parsed.flags) {
       if (flag === "name" || flag === "n") {
@@ -2106,7 +2134,13 @@ function parseUpdateFlags(parsed: ParsedArgs) {
   if (parsed.positionals.length > 1) {
     throw new Error("update accepts only one task id.");
   }
-  const blockedFlags = ["created_at", "updated_at", "claimed_by"];
+  const blockedFlags = [
+    "created_at",
+    "created_by",
+    "created-by",
+    "updated_at",
+    "claimed_by",
+  ];
   for (const flag of blockedFlags) {
     if (flag in parsed.flags) {
       throw new Error(`Flag "${flag}" is not allowed for update.`);
