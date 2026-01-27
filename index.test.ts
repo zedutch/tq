@@ -69,11 +69,20 @@ async function writeTaskFile(
     updated_at: string;
     status: "open" | "in_progress" | "done" | "cancelled";
     claimed_by: string;
+    claimed_at?: string;
+    created_by?: string;
     priority: number;
   },
   description: string,
 ) {
-  const content = formatTaskMarkdown(frontmatter, description);
+  const content = formatTaskMarkdown(
+    {
+      ...frontmatter,
+      created_by: frontmatter.created_by ?? "",
+      claimed_at: frontmatter.claimed_at ?? "",
+    },
+    description,
+  );
   await Bun.write(path.join(tasksDir, `${id}.md`), content);
 }
 
@@ -375,9 +384,11 @@ Bad priority.`;
       {
         name: "Doc format",
         created_at: "2026-01-27T10:00:00.000Z",
+        created_by: "robin",
         updated_at: "2026-01-27T10:00:00.000Z",
         status: "open",
         claimed_by: "",
+        claimed_at: "",
         priority: 2,
       },
       "Body text",
@@ -417,6 +428,7 @@ describe("task creation", () => {
         description: "Ship the feature.",
         now,
         skipGit: true,
+        env: { ...process.env, USER: "robin" },
       });
 
       expect(created.id).toMatch(/^[a-z0-9]{4}$/);
@@ -425,7 +437,9 @@ describe("task creation", () => {
       expect(parsed.frontmatter.name).toBe("New task");
       expect(parsed.frontmatter.status).toBe("open");
       expect(parsed.frontmatter.priority).toBe(2);
+      expect(parsed.frontmatter.created_by).toBe("robin");
       expect(parsed.frontmatter.claimed_by).toBe("");
+      expect(parsed.frontmatter.claimed_at).toBe("");
       expect(parsed.frontmatter.created_at).toBe(now.toISOString());
       expect(parsed.frontmatter.updated_at).toBe(now.toISOString());
       expect(parsed.description).toBe("Ship the feature.");
@@ -443,6 +457,7 @@ describe("task creation", () => {
           tasksDir,
           name: "   ",
           skipGit: true,
+          env: { ...process.env, USER: "robin" },
         }),
       ).rejects.toThrow("Task name is required");
     } finally {
@@ -464,6 +479,7 @@ describe("task updates", () => {
         description: "Original description",
         now: createdAt,
         skipGit: true,
+        env: { ...process.env, USER: "robin" },
       });
 
       const updated = await updateTask({
@@ -494,6 +510,7 @@ describe("task updates", () => {
     const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-tasks-"));
     const gitEnv = {
       ...process.env,
+      USER: "tq",
       GIT_AUTHOR_NAME: "tq",
       GIT_AUTHOR_EMAIL: "tq@example.com",
       GIT_COMMITTER_NAME: "tq",
@@ -575,6 +592,7 @@ describe("task claim/close/cancel", () => {
 
         expect(claimed.frontmatter.status).toBe("in_progress");
         expect(claimed.frontmatter.claimed_by).toBe("robin");
+        expect(claimed.frontmatter.claimed_at).toBe(now.toISOString());
         expect(claimed.frontmatter.updated_at).toBe(now.toISOString());
       } finally {
         await rm(tasksDir, { recursive: true, force: true });
@@ -873,6 +891,52 @@ describe("task list", () => {
     }
   });
 
+  test("filters by created_by", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
+
+    try {
+      await writeTaskFile(
+        tasksDir,
+        "a1b2",
+        {
+          name: "Alpha",
+          created_at: "2026-01-27T10:00:00.000Z",
+          updated_at: "2026-01-27T10:00:00.000Z",
+          status: "open",
+          created_by: "robin",
+          claimed_by: "",
+          priority: 1,
+        },
+        "First task",
+      );
+      await writeTaskFile(
+        tasksDir,
+        "b2c3",
+        {
+          name: "Beta",
+          created_at: "2026-01-27T11:00:00.000Z",
+          updated_at: "2026-01-27T11:00:00.000Z",
+          status: "open",
+          created_by: "sam",
+          claimed_by: "",
+          priority: 2,
+        },
+        "Second task",
+      );
+
+      const filtered = await listTasks({
+        tasksDir,
+        filters: {
+          createdBy: ["robin"],
+        },
+      });
+
+      expect(filtered.map((task) => task.id)).toEqual(["a1b2"]);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
   test("formats JSON output with list entries", async () => {
     const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-list-"));
 
@@ -902,7 +966,9 @@ describe("task list", () => {
         name: "Alpha",
         status: "open",
         priority: 1,
+        created_by: null,
         claimed_by: null,
+        claimed_at: null,
       });
     } finally {
       await rm(tasksDir, { recursive: true, force: true });
@@ -937,7 +1003,9 @@ describe("task show", () => {
         name: "Alpha",
         status: "open",
         priority: 2,
+        created_by: "",
         claimed_by: "",
+        claimed_at: "",
         created_at: "2026-01-27T10:00:00.000Z",
         updated_at: "2026-01-27T11:00:00.000Z",
         description,
@@ -959,7 +1027,9 @@ describe("task show", () => {
           created_at: "2026-01-27T12:00:00.000Z",
           updated_at: "2026-01-27T12:00:00.000Z",
           status: "in_progress",
+          created_by: "robin",
           claimed_by: "robin",
+          claimed_at: "2026-01-27T12:00:00.000Z",
           priority: 1,
         },
         "Details",
@@ -974,7 +1044,9 @@ describe("task show", () => {
         name: "Beta",
         status: "in_progress",
         priority: 1,
+        created_by: "robin",
         claimed_by: "robin",
+        claimed_at: "2026-01-27T12:00:00.000Z",
         description: "Details",
       });
     } finally {

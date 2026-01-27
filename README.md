@@ -53,7 +53,7 @@ Use `tq create` to write a new task file with defaults and commit it to the task
 tq create --name "Add task filters" --description "Support filtering by status." --priority 1
 ```
 
-`status` defaults to `open`, `priority` defaults to `2`, and `claimed_by` starts empty.
+`status` defaults to `open`, `priority` defaults to `2`, `created_by` is set to the current machine name, and `claimed_by`/`claimed_at` start empty.
 
 ## Updating tasks
 
@@ -75,8 +75,9 @@ Filter flags:
 - `-c` claimed_by
 - `-C` created_at
 - `-U` updated_at
+- `--mine` created_by matches the current user
 
-Long-form flags are also accepted: `--name`, `--status`, `--priority`, `--claimed-by`, `--created-at`, and `--updated-at`. Timestamps are normalized to ISO 8601 strings before matching.
+Long-form flags are also accepted: `--name`, `--status`, `--priority`, `--claimed-by`, `--created`, `--updated`, and `--mine`. Timestamps are normalized to ISO 8601 strings before matching.
 
 ```bash
 tq list -s open -s in_progress -p 1
@@ -104,7 +105,7 @@ tq show ab12 --json
 
 ## Claiming and finishing tasks
 
-Use `tq claim <id>` to claim a task. Claiming sets the status to `in_progress` and fills `claimed_by` with the configured machine name (or `USER`/`LOGNAME`).
+Use `tq claim <id>` to claim a task. Claiming sets the status to `in_progress`, fills `claimed_by` with the configured machine name (or `USER`/`LOGNAME`), and stamps `claimed_at`.
 
 ```bash
 tq claim ab12
@@ -135,9 +136,11 @@ Each task is a Markdown file named `<id>.md`, where the id is 4 lowercase alphan
 ---
 name: "Review queue"
 created_at: "2026-01-27T10:00:00.000Z"
+created_by: "robin"
 updated_at: "2026-01-27T10:00:00.000Z"
 status: "open"
 claimed_by: ""
+claimed_at: ""
 priority: 2
 ---
 

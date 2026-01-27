@@ -200,16 +200,18 @@ export type TaskFrontmatter = {
   updated_at: string;
   status: TaskStatus;
   claimed_by: string;
+  claimed_at: string;
   priority: number;
 };
 
 const taskFieldOrder: Array<keyof TaskFrontmatter> = [
   "name",
   "created_at",
+  "created_by",
   "updated_at",
   "status",
-  "created_by",
   "claimed_by",
+  "claimed_at",
   "priority",
 ];
 
@@ -319,6 +321,18 @@ export function normalizeTaskFrontmatter(raw: Record<string, unknown>) {
     claimedBy = claimedByRaw.trim();
   }
 
+  const claimedAtRaw = record.claimed_at;
+  let claimedAt = "";
+  if (claimedAtRaw !== undefined) {
+    if (typeof claimedAtRaw !== "string") {
+      throw new Error("Invalid task: claimed_at must be a string.");
+    }
+    claimedAt = claimedAtRaw.trim();
+    if (claimedAt && !isIsoTimestamp(claimedAt)) {
+      throw new Error("Invalid task: claimed_at must be an ISO 8601 timestamp.");
+    }
+  }
+
   const priority = normalizePriority(record.priority);
   if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
     throw new Error("Invalid task: priority must be an integer from 0 to 4.");
@@ -331,6 +345,7 @@ export function normalizeTaskFrontmatter(raw: Record<string, unknown>) {
     updated_at: updatedAt,
     status: status as TaskStatus,
     claimed_by: claimedBy,
+    claimed_at: claimedAt,
     priority,
   } satisfies TaskFrontmatter;
 }
@@ -377,7 +392,10 @@ export function formatTaskFrontmatter(frontmatter: TaskFrontmatter) {
   const lines: string[] = ["---"];
   for (const key of taskFieldOrder) {
     const value = normalized[key];
-    if ((key === "claimed_by" || key === "created_by") && value === "") {
+    if (
+      (key === "claimed_by" || key === "created_by" || key === "claimed_at") &&
+      value === ""
+    ) {
       continue;
     }
     if (typeof value === "number") {
@@ -853,6 +871,7 @@ export async function createTask(options: CreateTaskOptions) {
     updated_at: timestamp,
     status: options.status ?? "open",
     claimed_by: "",
+    claimed_at: "",
     priority: options.priority ?? 2,
   });
   const description = options.description ?? "";
@@ -1183,11 +1202,14 @@ export async function claimTask(options: ClaimTaskOptions) {
     );
   }
 
+  const now = options.now ?? new Date();
+
   const updatedFrontmatter = {
     ...task.frontmatter,
     status: "in_progress" as TaskStatus,
     claimed_by: claimedBy,
-    updated_at: (options.now ?? new Date()).toISOString(),
+    claimed_at: now.toISOString(),
+    updated_at: now.toISOString(),
   };
 
   const normalized = normalizeTaskFrontmatter(
@@ -1261,6 +1283,7 @@ export type TaskListEntry = {
   priority: number;
   created_by: string;
   claimed_by: string;
+  claimed_at: string;
   created_at: string;
   updated_at: string;
 };
@@ -1273,6 +1296,7 @@ type TaskListFilters = {
   names: string[];
   statuses: TaskStatus[];
   priorities: number[];
+  createdBy: string[];
   claimedBy: string[];
   createdAt: string[];
   updatedAt: string[];
@@ -1332,6 +1356,9 @@ function applyTaskFilters(task: TaskRecord, filters: TaskListFilters) {
   if (!matchesFilter(frontmatter.priority, filters.priorities)) {
     return false;
   }
+  if (!matchesFilter(frontmatter.created_by, filters.createdBy)) {
+    return false;
+  }
   if (!matchesFilter(frontmatter.claimed_by, filters.claimedBy)) {
     return false;
   }
@@ -1361,6 +1388,7 @@ export async function listTasks(options: {
     names: options.filters?.names ?? [],
     statuses,
     priorities: options.filters?.priorities ?? [],
+    createdBy: options.filters?.createdBy ?? [],
     claimedBy: options.filters?.claimedBy ?? [],
     createdAt: normalizeTimestampFilterValues(options.filters?.createdAt ?? []),
     updatedAt: normalizeTimestampFilterValues(options.filters?.updatedAt ?? []),
@@ -1395,6 +1423,7 @@ export function toTaskListEntry(task: TaskRecord): TaskListEntry {
     priority: task.frontmatter.priority,
     created_by: task.frontmatter.created_by,
     claimed_by: task.frontmatter.claimed_by,
+    claimed_at: task.frontmatter.claimed_at,
     created_at: task.frontmatter.created_at,
     updated_at: task.frontmatter.updated_at,
   };
@@ -1408,12 +1437,13 @@ export function toTaskShowEntry(task: TaskRecord): TaskShowEntry {
 }
 
 function normalizeTaskEntryAuthors<
-  T extends { claimed_by: string; created_by: string },
+  T extends { claimed_by: string; created_by: string; claimed_at: string },
 >(entry: T) {
   return {
     ...entry,
     created_by: entry.created_by ? entry.created_by : null,
     claimed_by: entry.claimed_by ? entry.claimed_by : null,
+    claimed_at: entry.claimed_at ? entry.claimed_at : null,
   };
 }
 
@@ -1502,6 +1532,7 @@ function formatTaskSummary(entry: TaskListEntry) {
 function formatTaskDetails(entry: TaskShowEntry) {
   const createdBy = entry.created_by ? entry.created_by : "-";
   const claimed = entry.claimed_by ? entry.claimed_by : "-";
+  const claimedAt = entry.claimed_at ? entry.claimed_at : "-";
   const lines = [
     `id: ${entry.id}`,
     `name: ${entry.name}`,
@@ -1509,6 +1540,7 @@ function formatTaskDetails(entry: TaskShowEntry) {
     `priority: ${entry.priority}`,
     `created_by: ${createdBy}`,
     `claimed_by: ${claimed}`,
+    `claimed_at: ${claimedAt}`,
     `created_at: ${entry.created_at}`,
     `updated_at: ${entry.updated_at}`,
     "",
@@ -1604,6 +1636,7 @@ List options:
   -c, --claimed-by <name>    filter by claimed_by (repeatable)
   -C, --created <timestamp>  filter by created_at (repeatable)
   -U, --updated <timestamp>  filter by updated_at (repeatable)
+  --mine                     only tasks created by the current user
   --all                      include all statuses
   --json                        emit JSON output
 `;
@@ -1656,6 +1689,7 @@ Options:
   -c, --claimed-by <name>    filter by claimed_by (repeatable)
   -C, --created <timestamp>  filter by created_at (repeatable)
   -U, --updated <timestamp>  filter by updated_at (repeatable)
+  --mine                     only tasks created by the current user
   --all                      include all statuses
   --json                     emit JSON output
   -h, --help                 show help for list
@@ -2055,6 +2089,8 @@ function parseCreateFlags(parsed: ParsedArgs) {
     "created_at",
     "created_by",
     "created-by",
+    "claimed_at",
+    "claimed-at",
     "updated_at",
     "claimed_by",
     "name",
@@ -2138,6 +2174,8 @@ function parseUpdateFlags(parsed: ParsedArgs) {
     "created_at",
     "created_by",
     "created-by",
+    "claimed_at",
+    "claimed-at",
     "updated_at",
     "claimed_by",
   ];
@@ -2238,6 +2276,7 @@ function parseListFlags(parsed: ParsedArgs) {
   );
   const json = parseFlagBoolean(parsed.flags.json, "JSON output");
   const all = parseFlagBoolean(parsed.flags.all, "All statuses");
+  const mine = parseFlagBoolean(parsed.flags.mine, "Mine");
 
   const names = nameValues.map((value) => parseStringFlag(value, "Name"));
   const statuses = statusValues.map((value) =>
@@ -2253,16 +2292,19 @@ function parseListFlags(parsed: ParsedArgs) {
   const updatedAt = updatedValues.map((value) =>
     parseFilterTimestamp(value, "Updated at"),
   );
+  const createdBy: string[] = [];
 
   return {
     json,
     all,
+    mine,
     filters: {
       names,
       statuses: statuses.filter(
         (value): value is TaskStatus => value !== undefined,
       ),
       priorities,
+      createdBy,
       claimedBy,
       createdAt,
       updatedAt,
@@ -2274,6 +2316,7 @@ function hasNonStatusFilters(filters: TaskListFilters) {
   return (
     filters.names.length > 0 ||
     filters.priorities.length > 0 ||
+    filters.createdBy.length > 0 ||
     filters.claimedBy.length > 0 ||
     filters.createdAt.length > 0 ||
     filters.updatedAt.length > 0
@@ -2312,9 +2355,15 @@ async function handleListCommand(parsed: ParsedArgs) {
   }
 
   try {
+    const filters = input.mine
+      ? {
+          ...input.filters,
+          createdBy: [resolveMachineName(await loadConfig(), process.env)],
+        }
+      : input.filters;
     const tasks = await listTasks({
       tasksDir: resolved.tasksDir,
-      filters: input.filters,
+      filters,
       includeAllStatuses: input.all,
     });
     const entries = tasks.map(toTaskListEntry);
@@ -2323,7 +2372,7 @@ async function handleListCommand(parsed: ParsedArgs) {
     } else if (entries.length > 0) {
       console.log(entries.map(formatTaskSummary).join("\n"));
     } else {
-      console.log(formatEmptyListMessage(input));
+      console.log(formatEmptyListMessage({ ...input, filters }));
     }
     return 0;
   } catch (error) {
