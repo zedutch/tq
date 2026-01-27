@@ -1419,11 +1419,19 @@ export function toTaskShowEntry(task: TaskRecord): TaskShowEntry {
 }
 
 export function formatTaskListJson(entries: TaskListEntry[]) {
-  return `${JSON.stringify(entries, null, 2)}\n`;
+  const normalized = entries.map((entry) => ({
+    ...entry,
+    claimed_by: entry.claimed_by ? entry.claimed_by : null,
+  }));
+  return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
 export function formatTaskShowJson(entry: TaskShowEntry) {
-  return `${JSON.stringify(entry, null, 2)}\n`;
+  const normalized = {
+    ...entry,
+    claimed_by: entry.claimed_by ? entry.claimed_by : null,
+  };
+  return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
 function formatTaskSummary(entry: TaskListEntry) {
@@ -2003,10 +2011,10 @@ function parseListFlags(parsed: ParsedArgs) {
     parsed.flags.c ?? parsed.flags["claimed-by"] ?? parsed.flags.claimed_by,
   );
   const createdValues = collectFlagValues(
-    parsed.flags.C ?? parsed.flags["created-at"] ?? parsed.flags.created_at,
+    parsed.flags.C ?? parsed.flags.created,
   );
   const updatedValues = collectFlagValues(
-    parsed.flags.U ?? parsed.flags["updated-at"] ?? parsed.flags.updated_at,
+    parsed.flags.U ?? parsed.flags.updated,
   );
   const json = parseFlagBoolean(parsed.flags.json, "JSON output");
 
