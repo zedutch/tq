@@ -12,7 +12,7 @@ To run the CLI:
 bun run index.ts -- --help
 ```
 
-The CLI entrypoint is `tq`. `init` is available now; additional subcommands (like `list` and `show`) are planned.
+The CLI entrypoint is `tq`. `init` and `create` are available now; additional subcommands (like `list` and `show`) are planned.
 
 ## Configuration
 
@@ -38,6 +38,16 @@ If `machine.name` is omitted, `tq` falls back to `USER` or `LOGNAME` when claimi
 ## Initialization
 
 Use `tq init` to set up task storage for the current workspace. By default it uses local mode and creates a `.tasks` directory in the workspace. Use `tq init --mode global` to register the workspace in the config and create its tasks directory under the global data path. Global mode does not create `.tasks` in the project repo.
+
+## Creating tasks
+
+Use `tq create` to write a new task file with defaults and commit it to the tasks repository. The command returns the new task id.
+
+```bash
+tq create --name "Add task filters" --description "Support filtering by status." --priority 1
+```
+
+`status` defaults to `open`, `priority` defaults to `2`, and `claimed_by` starts empty.
 
 ## Task repository
 

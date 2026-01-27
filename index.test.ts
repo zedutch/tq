@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  createTask,
   formatConfig,
   formatTaskMarkdown,
   commitTasksRepository,
@@ -360,6 +361,52 @@ Bad priority.`;
     const id = generateTaskId(existing, { randomBytes, maxAttempts: 3 });
     expect(id).toBe("baaa");
     expect(calls).toBe(2);
+  });
+});
+
+describe("task creation", () => {
+  test("creates task with defaults and writes markdown", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-tasks-"));
+    const now = new Date("2026-01-27T12:00:00.000Z");
+
+    try {
+      const created = await createTask({
+        tasksDir,
+        name: "New task",
+        description: "Ship the feature.",
+        now,
+        skipGit: true,
+      });
+
+      expect(created.id).toMatch(/^[a-z0-9]{4}$/);
+      const contents = await Bun.file(created.path).text();
+      const parsed = parseTaskMarkdown(contents);
+      expect(parsed.frontmatter.name).toBe("New task");
+      expect(parsed.frontmatter.status).toBe("open");
+      expect(parsed.frontmatter.priority).toBe(2);
+      expect(parsed.frontmatter.claimed_by).toBe("");
+      expect(parsed.frontmatter.created_at).toBe(now.toISOString());
+      expect(parsed.frontmatter.updated_at).toBe(now.toISOString());
+      expect(parsed.description).toBe("Ship the feature.");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects empty task names", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-tasks-"));
+
+    try {
+      await expect(
+        createTask({
+          tasksDir,
+          name: "   ",
+          skipGit: true,
+        }),
+      ).rejects.toThrow("Task name is required");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -68,7 +68,7 @@
     - Commit and push the change using the git helper when a remote is configured.
     - Print the new task id so it can be referenced.
     - Update `README.md` with `tq create` examples and defaults.
-  done: false
+  done: true
 - category: functional
   description: Implement `tq update` to edit allowed metadata and task description.
   steps:

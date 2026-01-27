@@ -1,4 +1,4 @@
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, readdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -402,6 +402,24 @@ export function generateTaskId(
   throw new Error("Unable to generate unique task id.");
 }
 
+async function listTaskIds(tasksDir: string) {
+  const entries = await readdir(tasksDir, { withFileTypes: true });
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!entry.name.endsWith(".md")) {
+      continue;
+    }
+    const name = entry.name.slice(0, -3);
+    if (/^[a-z0-9]{4}$/.test(name)) {
+      ids.add(name);
+    }
+  }
+  return ids;
+}
+
 async function isDirectory(targetPath: string) {
   try {
     return (await stat(targetPath)).isDirectory();
@@ -746,6 +764,83 @@ export async function initWorkspace(
   };
 }
 
+type CreateTaskOptions = {
+  tasksDir: string;
+  name: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: number;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+};
+
+export async function createTask(options: CreateTaskOptions) {
+  const env = options.env ?? process.env;
+  const name = options.name.trim();
+  if (!name) {
+    throw new Error("Task name is required.");
+  }
+  if (!(await isDirectory(options.tasksDir))) {
+    throw new Error(
+      `Tasks directory not initialized at ${options.tasksDir}. Run "tq init" first.`,
+    );
+  }
+
+  if (!options.skipGit) {
+    await prepareTasksRepository(options.tasksDir, env);
+    const staged = await runGitCommand(
+      options.tasksDir,
+      ["diff", "--cached", "--name-only"],
+      { env },
+    );
+    if (staged.stdout.trim()) {
+      throw new Error(
+        "Tasks repository has staged changes. Commit or unstage them before creating a task.",
+      );
+    }
+  }
+
+  const existingIds = await listTaskIds(options.tasksDir);
+  const id = generateTaskId(existingIds);
+  const timestamp = (options.now ?? new Date()).toISOString();
+  const frontmatter = normalizeTaskFrontmatter({
+    name,
+    created_at: timestamp,
+    updated_at: timestamp,
+    status: options.status ?? "open",
+    claimed_by: "",
+    priority: options.priority ?? 2,
+  });
+  const description = options.description ?? "";
+  const content = formatTaskMarkdown(frontmatter, description);
+  const taskFileName = `${id}.md`;
+  const taskPath = path.join(options.tasksDir, taskFileName);
+  await Bun.write(taskPath, content);
+
+  if (!options.skipGit) {
+    await runGitCommand(options.tasksDir, ["add", "--", taskFileName], {
+      env,
+    });
+    const staged = await runGitCommand(
+      options.tasksDir,
+      ["diff", "--cached", "--name-only"],
+      { env },
+    );
+    if (!staged.stdout.trim()) {
+      return { id, path: taskPath, frontmatter, description };
+    }
+    await runGitCommand(
+      options.tasksDir,
+      withGitCommitIdentity(["commit", "-m", `tq: create task ${id}`], env),
+      { env },
+    );
+    await pushTasksRepository(options.tasksDir, env);
+  }
+
+  return { id, path: taskPath, frontmatter, description };
+}
+
 type ParsedArgs = {
   command: string | null;
   flags: Record<string, FlagBucket>;
@@ -788,6 +883,16 @@ Options:
 Init options:
   --mode <local|global>  choose workspace mode (default: local)
   -m <local|global>      shorthand for --mode
+
+Create options:
+  --name <text>         task name (required)
+  --description <text>  task description
+  --status <status>     open, in_progress, done, cancelled
+  --priority <0-4>      task priority (default: 2)
+  -n <text>             shorthand for --name
+  -d <text>             shorthand for --description
+  -s <status>           shorthand for --status
+  -p <0-4>              shorthand for --priority
 `;
 
 function addFlag(
@@ -815,6 +920,29 @@ function readFlagValue(bucket: FlagBucket | undefined) {
     return bucket[bucket.length - 1];
   }
   return bucket;
+}
+
+function parseFlagString(raw: FlagValue | undefined, label: string) {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === true) {
+    throw new Error(`${label} requires a value.`);
+  }
+  if (typeof raw !== "string") {
+    throw new Error(`${label} must be a string.`);
+  }
+  return raw;
+}
+
+function parseFlagPriority(raw: FlagValue | undefined) {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === true) {
+    throw new Error("Priority requires a value.");
+  }
+  return normalizePriority(raw);
 }
 
 function parseLongFlag(token: string, next: string | undefined) {
@@ -978,6 +1106,91 @@ async function handleInitCommand(parsed: ParsedArgs) {
   }
 }
 
+function parseCreateStatus(raw: string | undefined): TaskStatus | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const normalized = raw.trim();
+  if (!normalized) {
+    throw new Error("Status cannot be empty.");
+  }
+  if (!taskStatusSet.has(normalized as TaskStatus)) {
+    throw new Error(`Status "${raw}" is not supported.`);
+  }
+  return normalized as TaskStatus;
+}
+
+function parseCreateFlags(parsed: ParsedArgs) {
+  if (parsed.positionals.length > 0) {
+    throw new Error("create does not accept positional arguments.");
+  }
+  const blockedFlags = ["created_at", "updated_at", "claimed_by"];
+  for (const flag of blockedFlags) {
+    if (flag in parsed.flags) {
+      throw new Error(`Flag "${flag}" is not allowed for create.`);
+    }
+  }
+
+  const nameRaw = parseFlagString(
+    readFlagValue(parsed.flags.name ?? parsed.flags.n),
+    "Name",
+  );
+  if (!nameRaw || !nameRaw.trim()) {
+    throw new Error("Name is required for create.");
+  }
+  const description = parseFlagString(
+    readFlagValue(parsed.flags.description ?? parsed.flags.d),
+    "Description",
+  );
+  const statusRaw = parseFlagString(
+    readFlagValue(parsed.flags.status ?? parsed.flags.s),
+    "Status",
+  );
+  const priority = parseFlagPriority(
+    readFlagValue(parsed.flags.priority ?? parsed.flags.p),
+  );
+
+  return {
+    name: nameRaw.trim(),
+    description,
+    status: parseCreateStatus(statusRaw),
+    priority,
+  };
+}
+
+async function handleCreateCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseCreateFlags>;
+  try {
+    input = parseCreateFlags(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const created = await createTask({
+      tasksDir: resolved.tasksDir,
+      name: input.name,
+      description: input.description,
+      status: input.status,
+      priority: input.priority,
+    });
+    console.log(created.id);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
@@ -992,6 +1205,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "init") {
     return handleInitCommand(parsed);
+  }
+  if (parsed.command === "create") {
+    return handleCreateCommand(parsed);
   }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }
