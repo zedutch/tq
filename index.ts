@@ -1487,24 +1487,19 @@ Options:
   -h, --help  show help
 
 Init options:
-  --mode <local|global>  choose workspace mode (default: local)
-  -m <local|global>      shorthand for --mode
+  -m,  --mode <local|global>  choose workspace mode (default: local)
 
 Create options:
-  --name <text>         task name (required)
-  --description <text>  task description
-  --status <status>     open, in_progress, done, cancelled
-  --priority <0-4>      task priority (default: 2)
-  -n <text>             shorthand for --name
-  -d <text>             shorthand for --description
-  -s <status>           shorthand for --status
-  -p <0-4>              shorthand for --priority
+  -n, --name <text>         task name (required)
+  -d, --description <text>  task description
+  -s, --status <status>     open, in_progress, done, cancelled
+  -p, --priority <0-4>      task priority (default: 2)
 
 Update options:
-  -n <text>         task name
-  -d <text>         task description
-  -s <status>       open, in_progress, done, cancelled
-  -p <0-4>          task priority
+  -n, --name <text>         task name
+  -d, --description <text>  task description
+  -s, --status <status>     open, in_progress, done, cancelled
+  -p, --priority <0-4>      task priority
 
 Show options:
   --json            emit JSON output
@@ -1519,19 +1514,13 @@ Cancel options:
   (no options)
 
 List options:
-  -n <text>         filter by name (repeatable)
-  -s <status>       filter by status (repeatable)
-  -p <0-4>          filter by priority (repeatable)
-  -c <name>         filter by claimed_by (repeatable)
-  -C <timestamp>    filter by created_at (repeatable)
-  -U <timestamp>    filter by updated_at (repeatable)
-  --name <text>      long form for -n
-  --status <status>  long form for -s
-  --priority <0-4>   long form for -p
-  --claimed-by <t>   long form for -c
-  --created-at <t>   long form for -C
-  --updated-at <t>   long form for -U
-  --json            emit JSON output
+  -n, --name <text>          filter by name (repeatable)
+  -s, --status <status>      filter by status (repeatable)
+  -p, --priority <0-4>       filter by priority (repeatable)
+  -c, --claimed-by <name>    filter by claimed_by (repeatable)
+  -C, --created <timestamp>  filter by created_at (repeatable)
+  -U, --updated <timestamp>  filter by updated_at (repeatable)
+  --json                        emit JSON output
 `;
 
 function addFlag(
