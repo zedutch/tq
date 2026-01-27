@@ -1,5 +1,177 @@
+import { mkdir, rename } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+
 type FlagValue = string | boolean;
 type FlagBucket = FlagValue | FlagValue[];
+
+type MachineConfig = {
+  name?: string;
+};
+
+type TqConfig = {
+  machine: MachineConfig;
+  workspaces: Record<string, string>;
+};
+
+function createDefaultConfig(): TqConfig {
+  return {
+    machine: {},
+    workspaces: {},
+  };
+}
+
+function assertSupportedPlatform() {
+  if (process.platform === "win32") {
+    throw new Error("tq does not support Windows config paths yet.");
+  }
+}
+
+export function resolveXdgConfigHome(env: NodeJS.ProcessEnv = process.env) {
+  assertSupportedPlatform();
+  const configured = env.XDG_CONFIG_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  const home = env.HOME?.trim() ?? homedir();
+  if (!home) {
+    throw new Error("Unable to resolve HOME directory for config.");
+  }
+  return path.join(home, ".config");
+}
+
+export function resolveXdgDataHome(env: NodeJS.ProcessEnv = process.env) {
+  assertSupportedPlatform();
+  const configured = env.XDG_DATA_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  const home = env.HOME?.trim() ?? homedir();
+  if (!home) {
+    throw new Error("Unable to resolve HOME directory for data.");
+  }
+  return path.join(home, ".local", "share");
+}
+
+export function resolveConfigPath(env: NodeJS.ProcessEnv = process.env) {
+  return path.join(resolveXdgConfigHome(env), "tq", "config.toml");
+}
+
+export function resolveGlobalTasksBase(env: NodeJS.ProcessEnv = process.env) {
+  return path.join(resolveXdgDataHome(env), "tq", "tasks");
+}
+
+function ensurePlainObject(value: unknown, label: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid config: ${label} must be a table.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+export function normalizeConfig(raw: unknown): TqConfig {
+  if (raw === null || raw === undefined) {
+    return createDefaultConfig();
+  }
+  const record = ensurePlainObject(raw, "root");
+  const allowedKeys = new Set(["machine", "workspaces"]);
+  for (const key of Object.keys(record)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`Invalid config: unsupported field "${key}".`);
+    }
+  }
+
+  const machine: MachineConfig = {};
+  if (record.machine !== undefined) {
+    const machineRecord = ensurePlainObject(record.machine, "machine");
+    if (machineRecord.name !== undefined) {
+      if (
+        typeof machineRecord.name !== "string" ||
+        machineRecord.name.trim() === ""
+      ) {
+        throw new Error(
+          "Invalid config: machine.name must be a non-empty string.",
+        );
+      }
+      machine.name = machineRecord.name.trim();
+    }
+  }
+
+  const workspaces: Record<string, string> = {};
+  if (record.workspaces !== undefined) {
+    const workspaceRecord = ensurePlainObject(record.workspaces, "workspaces");
+    for (const [key, value] of Object.entries(workspaceRecord)) {
+      if (typeof value !== "string" || value.trim() === "") {
+        throw new Error(
+          `Invalid config: workspaces.${key} must be a non-empty string.`,
+        );
+      }
+      workspaces[key] = value;
+    }
+  }
+
+  return { machine, workspaces };
+}
+
+export function formatConfig(config: TqConfig) {
+  const normalized = normalizeConfig(config);
+  const lines: string[] = [];
+  lines.push("[machine]");
+  if (normalized.machine.name) {
+    lines.push(`name = ${JSON.stringify(normalized.machine.name)}`);
+  }
+  lines.push("");
+  lines.push("[workspaces]");
+  for (const key of Object.keys(normalized.workspaces).sort()) {
+    const value = normalized.workspaces[key];
+    lines.push(`${JSON.stringify(key)} = ${JSON.stringify(value)}`);
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+export async function loadConfig() {
+  assertSupportedPlatform();
+  const configPath = resolveConfigPath();
+  const file = Bun.file(configPath);
+  if (!(await file.exists())) {
+    return createDefaultConfig();
+  }
+
+  const text = await file.text();
+  try {
+    const parsed = Bun.TOML.parse(text);
+    return normalizeConfig(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid config at ${configPath}: ${message}`);
+  }
+}
+
+export async function saveConfig(config: TqConfig) {
+  assertSupportedPlatform();
+  const configPath = resolveConfigPath();
+  const content = formatConfig(config);
+  await mkdir(path.dirname(configPath), { recursive: true });
+
+  const tempPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
+  await Bun.write(tempPath, content);
+  await rename(tempPath, configPath);
+}
+
+export function resolveMachineName(
+  config: TqConfig,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (config.machine.name) {
+    return config.machine.name;
+  }
+  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  throw new Error(
+    "Unable to resolve machine name. Set machine.name in config or define USER/LOGNAME.",
+  );
+}
 
 type ParsedArgs = {
   command: string | null;
@@ -41,7 +213,11 @@ Options:
   -h, --help  show help
 `;
 
-function addFlag(flags: Record<string, FlagBucket>, name: string, value: FlagValue) {
+function addFlag(
+  flags: Record<string, FlagBucket>,
+  name: string,
+  value: FlagValue,
+) {
   const existing = flags[name];
   if (existing === undefined) {
     flags[name] = value;
@@ -79,7 +255,7 @@ function parseLongFlag(token: string, next: string | undefined) {
 function parseShortFlag(token: string, next: string | undefined) {
   const body = token.slice(1);
   if (!body) {
-    throw new Error("Invalid flag: \"-\"");
+    throw new Error('Invalid flag: "-"');
   }
   if (body.includes("=")) {
     const [name, value] = body.split("=");
@@ -158,7 +334,10 @@ export function formatHelp() {
   return helpText;
 }
 
-function isHelpRequest(command: string | null, flags: Record<string, FlagBucket>) {
+function isHelpRequest(
+  command: string | null,
+  flags: Record<string, FlagBucket>,
+) {
   return command === "help" || flags.help === true || flags.h === true;
 }
 

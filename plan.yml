@@ -17,7 +17,7 @@
     - Resolve machine name from config or from `USER`/`LOGNAME` when claiming tasks.
     - Validate config fields and provide clear errors for unsupported platforms or invalid modes.
     - Update `README.md` to document config file format and defaults.
-  done: false
+  done: true
 - category: workspace
   description: Resolve workspace mode and tasks directory without leaving artifacts in global mode.
   steps:
