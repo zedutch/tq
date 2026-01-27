@@ -418,6 +418,235 @@ async function isDirectory(targetPath: string) {
   }
 }
 
+type GitCommandResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+};
+
+type GitCommandOptions = {
+  env?: NodeJS.ProcessEnv;
+  allowFailure?: boolean;
+};
+
+export async function runGitCommand(
+  tasksDir: string,
+  args: string[],
+  options: GitCommandOptions = {},
+): Promise<GitCommandResult> {
+  const env = options.env ?? process.env;
+  const processResult = Bun.spawn(["git", ...args], {
+    cwd: tasksDir,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(processResult.stdout).text(),
+    new Response(processResult.stderr).text(),
+    processResult.exited,
+  ]);
+
+  const result = { stdout, stderr, exitCode };
+  if (exitCode !== 0 && !options.allowFailure) {
+    const details = stderr.trim() || stdout.trim();
+    const detailMessage = details ? `: ${details}` : "";
+    throw new Error(
+      `Git command failed (git ${args.join(" ")})${detailMessage}`,
+    );
+  }
+  return result;
+}
+
+async function getGitRemotes(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string[]> {
+  const result = await runGitCommand(tasksDir, ["remote"], { env });
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function getGitUpstream(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | null> {
+  const result = await runGitCommand(
+    tasksDir,
+    ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    { env, allowFailure: true },
+  );
+  if (result.exitCode !== 0) {
+    return null;
+  }
+  const trimmed = result.stdout.trim();
+  return trimmed ? trimmed : null;
+}
+
+function sanitizeEmailLocalPart(value: string) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+  return normalized || "tq";
+}
+
+function resolveGitCommitIdentity(env: NodeJS.ProcessEnv) {
+  const name =
+    env.GIT_AUTHOR_NAME?.trim() ||
+    env.GIT_COMMITTER_NAME?.trim() ||
+    env.USER?.trim() ||
+    env.LOGNAME?.trim() ||
+    "tq";
+  const email =
+    env.GIT_AUTHOR_EMAIL?.trim() ||
+    env.GIT_COMMITTER_EMAIL?.trim() ||
+    `${sanitizeEmailLocalPart(name)}@localhost`;
+  return { name, email };
+}
+
+function withGitCommitIdentity(args: string[], env: NodeJS.ProcessEnv) {
+  const identity = resolveGitCommitIdentity(env);
+  return [
+    "-c",
+    `user.name=${identity.name}`,
+    "-c",
+    `user.email=${identity.email}`,
+    ...args,
+  ];
+}
+
+async function hasGitCommits(tasksDir: string, env: NodeJS.ProcessEnv) {
+  const result = await runGitCommand(
+    tasksDir,
+    ["rev-parse", "--verify", "HEAD"],
+    {
+      env,
+      allowFailure: true,
+    },
+  );
+  return result.exitCode === 0;
+}
+
+export async function ensureGitRepository(
+  tasksDir: string,
+  initGit = true,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (!initGit) {
+    return;
+  }
+  await mkdir(tasksDir, { recursive: true });
+  const gitDir = path.join(tasksDir, ".git");
+  if (!(await isDirectory(gitDir))) {
+    try {
+      await runGitCommand(tasksDir, ["init"], { env });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Unable to initialize git repo in ${tasksDir}: ${message}`,
+      );
+    }
+  }
+
+  if (!(await hasGitCommits(tasksDir, env))) {
+    await runGitCommand(
+      tasksDir,
+      withGitCommitIdentity(
+        ["commit", "--allow-empty", "-m", "tq: initialize task repository"],
+        env,
+      ),
+      {
+        env,
+      },
+    );
+  }
+}
+
+export async function hasGitRemote(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const remotes = await getGitRemotes(tasksDir, env);
+  return remotes.length > 0;
+}
+
+export async function pullTasksRepository(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const remotes = await getGitRemotes(tasksDir, env);
+  if (remotes.length === 0) {
+    return false;
+  }
+  const upstream = await getGitUpstream(tasksDir, env);
+  if (upstream) {
+    await runGitCommand(tasksDir, ["pull", "--rebase", "--autostash"], { env });
+  } else {
+    await runGitCommand(
+      tasksDir,
+      ["pull", "--rebase", "--autostash", remotes[0] ?? "origin", "HEAD"],
+      { env },
+    );
+  }
+  return true;
+}
+
+export async function pushTasksRepository(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const remotes = await getGitRemotes(tasksDir, env);
+  if (remotes.length === 0) {
+    return false;
+  }
+  const upstream = await getGitUpstream(tasksDir, env);
+  if (upstream) {
+    await runGitCommand(tasksDir, ["push"], { env });
+  } else {
+    await runGitCommand(
+      tasksDir,
+      ["push", "--set-upstream", remotes[0] ?? "origin", "HEAD"],
+      { env },
+    );
+  }
+  return true;
+}
+
+export async function prepareTasksRepository(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  await ensureGitRepository(tasksDir, true, env);
+  await pullTasksRepository(tasksDir, env);
+}
+
+export async function commitTasksRepository(
+  tasksDir: string,
+  message: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  await runGitCommand(tasksDir, ["add", "-A"], { env });
+  const status = await runGitCommand(tasksDir, ["status", "--porcelain"], {
+    env,
+  });
+  if (!status.stdout.trim()) {
+    return { committed: false, pushed: false };
+  }
+  await runGitCommand(
+    tasksDir,
+    withGitCommitIdentity(["commit", "-m", message], env),
+    { env },
+  );
+  const pushed = await pushTasksRepository(tasksDir, env);
+  return { committed: true, pushed };
+}
+
 export async function resolveTasksDirectory(
   workspacePath = process.cwd(),
   env: NodeJS.ProcessEnv = process.env,
@@ -455,22 +684,6 @@ type InitWorkspaceOptions = {
   initGit?: boolean;
 };
 
-async function ensureGitRepository(tasksDir: string, initGit = true) {
-  if (!initGit) {
-    return;
-  }
-  const gitDir = path.join(tasksDir, ".git");
-  if (await isDirectory(gitDir)) {
-    return;
-  }
-  try {
-    await Bun.$`git -C ${tasksDir} init`;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to initialize git repo in ${tasksDir}: ${message}`);
-  }
-}
-
 async function generateWorkspaceId(
   existingIds: ReadonlySet<string>,
   baseDir: string,
@@ -497,7 +710,7 @@ export async function initWorkspace(
 
   if (mode === "local") {
     await mkdir(localTasksDir, { recursive: true });
-    await ensureGitRepository(localTasksDir, options.initGit ?? true);
+    await ensureGitRepository(localTasksDir, options.initGit ?? true, env);
     return {
       mode: "local",
       workspacePath,
@@ -523,7 +736,7 @@ export async function initWorkspace(
 
   const tasksDir = path.join(baseDir, workspaceId);
   await mkdir(tasksDir, { recursive: true });
-  await ensureGitRepository(tasksDir, options.initGit ?? true);
+  await ensureGitRepository(tasksDir, options.initGit ?? true, env);
 
   return {
     mode: "global",

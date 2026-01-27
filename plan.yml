@@ -46,7 +46,7 @@
     - Commit every change made by tq with a concise, consistent message.
     - Push after each successful commit when a remote is configured.
     - Update `README.md` to explain that tq uses git for task history.
-  done: false
+  done: true
 - category: model
   description: Define the task markdown format, required metadata, and id generation rules.
   steps:

@@ -5,11 +5,15 @@ import path from "node:path";
 import {
   formatConfig,
   formatTaskMarkdown,
+  commitTasksRepository,
+  ensureGitRepository,
   generateTaskId,
+  hasGitRemote,
   initWorkspace,
   loadConfig,
   normalizeConfig,
   parseTaskMarkdown,
+  runGitCommand,
   resolveConfigPath,
   resolveGlobalTasksBase,
   resolveMachineName,
@@ -356,5 +360,86 @@ Bad priority.`;
     const id = generateTaskId(existing, { randomBytes, maxAttempts: 3 });
     expect(id).toBe("baaa");
     expect(calls).toBe(2);
+  });
+});
+
+describe("git helpers", () => {
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "tq",
+    GIT_AUTHOR_EMAIL: "tq@example.com",
+    GIT_COMMITTER_NAME: "tq",
+    GIT_COMMITTER_EMAIL: "tq@example.com",
+  } as NodeJS.ProcessEnv;
+
+  test("initializes repo and creates initial commit", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-git-"));
+
+    try {
+      await ensureGitRepository(tasksDir, true, gitEnv);
+      const head = await runGitCommand(
+        tasksDir,
+        ["rev-parse", "--verify", "HEAD"],
+        {
+          env: gitEnv,
+        },
+      );
+      expect(head.exitCode).toBe(0);
+
+      const message = await runGitCommand(
+        tasksDir,
+        ["log", "-1", "--pretty=%B"],
+        {
+          env: gitEnv,
+        },
+      );
+      expect(message.stdout.trim()).toBe("tq: initialize task repository");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("commits changes and skips empty commits", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-git-"));
+
+    try {
+      await ensureGitRepository(tasksDir, true, gitEnv);
+      await Bun.write(path.join(tasksDir, "task.md"), "task");
+
+      const first = await commitTasksRepository(
+        tasksDir,
+        "tq: add task",
+        gitEnv,
+      );
+      expect(first.committed).toBe(true);
+
+      const second = await commitTasksRepository(
+        tasksDir,
+        "tq: add task",
+        gitEnv,
+      );
+      expect(second.committed).toBe(false);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("detects configured git remotes", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-git-"));
+    const remoteDir = await mkdtemp(path.join(tmpdir(), "tq-remote-"));
+
+    try {
+      await ensureGitRepository(tasksDir, true, gitEnv);
+      await runGitCommand(remoteDir, ["init", "--bare"], { env: gitEnv });
+
+      expect(await hasGitRemote(tasksDir, gitEnv)).toBe(false);
+      await runGitCommand(tasksDir, ["remote", "add", "origin", remoteDir], {
+        env: gitEnv,
+      });
+      expect(await hasGitRemote(tasksDir, gitEnv)).toBe(true);
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+      await rm(remoteDir, { recursive: true, force: true });
+    }
   });
 });
