@@ -293,9 +293,13 @@ export function normalizeTaskFrontmatter(raw: Record<string, unknown>) {
     throw new Error(`Invalid task: status "${status}" is not supported.`);
   }
 
-  const claimedBy = record.claimed_by;
-  if (typeof claimedBy !== "string") {
-    throw new Error("Invalid task: claimed_by must be a string.");
+  const claimedByRaw = record.claimed_by;
+  let claimedBy = "";
+  if (claimedByRaw !== undefined) {
+    if (typeof claimedByRaw !== "string") {
+      throw new Error("Invalid task: claimed_by must be a string.");
+    }
+    claimedBy = claimedByRaw.trim();
   }
 
   const priority = normalizePriority(record.priority);
@@ -355,6 +359,9 @@ export function formatTaskFrontmatter(frontmatter: TaskFrontmatter) {
   const lines: string[] = ["---"];
   for (const key of taskFieldOrder) {
     const value = normalized[key];
+    if (key === "claimed_by" && value === "") {
+      continue;
+    }
     if (typeof value === "number") {
       lines.push(`${key}: ${value}`);
     } else {
