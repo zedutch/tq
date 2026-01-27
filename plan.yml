@@ -1,0 +1,132 @@
+- category: scaffolding
+  description: Set up the CLI entrypoint and argument parsing so tq can route commands consistently.
+  steps:
+    - Define the CLI entrypoint in `package.json` and point to the main TypeScript file.
+    - Implement a minimal argument parser that supports subcommands, flags, and help output.
+    - Add consistent exit codes and error messages for unknown commands and invalid flags.
+    - Ensure the CLI runs under Bun without any Node-specific assumptions.
+    - Update `README.md` to match the CLI entrypoint and help usage.
+  done: false
+- category: config
+  description: Resolve XDG paths and persist a TOML config for machine name and global workspaces.
+  steps:
+    - Implement helpers to read `XDG_CONFIG_HOME` and `XDG_DATA_HOME` with fallbacks to `~/.config` and `~/.local/share`.
+    - Compute `~/.config/tq/config.toml` and the global tasks base at `~/.local/share/tq/tasks`.
+    - Define a TOML schema with a top-level machine `name` and a map of global workspaces to ids.
+    - Read and write the config file atomically, creating parent directories as needed.
+    - Resolve machine name from config or from `USER`/`LOGNAME` when claiming tasks.
+    - Validate config fields and provide clear errors for unsupported platforms or invalid modes.
+    - Update `README.md` to document config file format and defaults.
+  done: false
+- category: workspace
+  description: Resolve workspace mode and tasks directory without leaving artifacts in global mode.
+  steps:
+    - Detect local mode by the presence of a `.tasks` directory in the current workspace.
+    - For global mode, load the workspace id from config and map it to the global tasks base.
+    - Ensure global mode never creates `.tasks` or other tq files inside the project repo.
+    - Provide clear errors when a global workspace is not registered.
+    - Update `README.md` to explain local vs global resolution rules.
+  done: false
+- category: workspace
+  description: Implement `tq init` to register workspaces and create the tasks directory.
+  steps:
+    - Support `tq init --mode local|global` with local as the default.
+    - In local mode, create `.tasks` in the workspace and register nothing globally.
+    - In global mode, allocate a short workspace id and create its tasks folder in the global base.
+    - Persist the global workspace entry (path and id) in the TOML config.
+    - Initialize the tasks directory with git using the shared repo helper.
+    - Update `README.md` with `tq init` usage and behavior.
+  done: false
+- category: git
+  description: Manage the tasks repository with git and keep changes synced when a remote is configured.
+  steps:
+    - Implement a git command runner that operates within the tasks directory.
+    - Initialize a git repo when missing and create an initial commit.
+    - Detect whether a remote is configured and pull before any tq mutation.
+    - Commit every change made by tq with a concise, consistent message.
+    - Push after each successful commit when a remote is configured.
+    - Update `README.md` to explain that tq uses git for task history.
+  done: false
+- category: model
+  description: Define the task markdown format, required metadata, and id generation rules.
+  steps:
+    - Implement frontmatter parsing and serialization with a fixed field set.
+    - Require `name`, `created_at`, `updated_at`, `status`, `claimed_by`, and `priority` in the preamble.
+    - Default missing priorities to `2` when loading and enforce a 0–4 range.
+    - Use ISO 8601 timestamps and update `updated_at` on every mutation.
+    - Generate 4-character alphanumeric ids and retry on collisions with existing tasks.
+    - Keep file content as the task description to preserve markdown readability.
+    - Update `README.md` with the task file format and id rules.
+  done: false
+- category: functional
+  description: Implement `tq create` to add tasks with explicit metadata defaults.
+  steps:
+    - Require a resolved tasks directory and guide users to `tq init` if missing.
+    - Parse name, description, status, and priority flags while blocking user input for `created_at`, `updated_at`, and `claimed_by`.
+    - Apply defaults for status (`open`) and priority (`2`) when omitted.
+    - Write the task file with frontmatter and description content.
+    - Commit and push the change using the git helper when a remote is configured.
+    - Print the new task id so it can be referenced.
+    - Update `README.md` with `tq create` examples and defaults.
+  done: false
+- category: functional
+  description: Implement `tq update` to edit allowed metadata and task description.
+  steps:
+    - Resolve a task by id and load its frontmatter and content.
+    - "Use the same flags as `tq list` for updatable fields: `-n` (name), `-s` (status), `-p` (priority), and `-d` (description)."
+    - Allow updates to `name`, `status`, and `priority`, and optionally replace the description.
+    - Reject attempts to set `created_at`, `updated_at`, or `claimed_by` from CLI flags.
+    - Update `updated_at` and write the task file back to disk.
+    - Commit and push the change using the git helper when a remote is configured.
+    - Update `README.md` with `tq update` usage and restrictions.
+  done: false
+- category: functional
+  description: Implement `tq list` with filtering, summaries, and JSON output.
+  steps:
+    - Load and parse all task files from the tasks directory.
+    - "Filter by any field using unique single-letter flags: `-n` (name), `-s` (status), `-p` (priority), `-c` (claimed_by), `-C` (created_at), `-U` (updated_at)."
+    - Allow repeating the same flag to OR within a field and combine different flags with AND semantics.
+    - Render a concise summary per task including id, name, status, priority, and claimed_by.
+    - Provide a `--json` flag that emits a structured array for automation.
+    - Use a deterministic ordering to keep output stable across runs.
+    - Update `README.md` with `tq list` filters and output examples.
+  done: false
+- category: functional
+  description: Implement `tq show` to display full task details with optional JSON.
+  steps:
+    - Resolve a task by id and parse its frontmatter and description content.
+    - Render a concise detailed view including metadata and the full description.
+    - Provide a `--json` flag that emits a structured object for automation.
+    - Return clear errors when a task id is missing or not found.
+    - Update `README.md` with `tq show` usage and output format.
+  done: false
+- category: functional
+  description: Implement `tq claim`, `tq close`, and `tq cancel` shortcuts.
+  steps:
+    - Implement `tq claim <id>` to pull remote changes before checking claim status.
+    - Verify the task is unclaimed; if claimed, return an error naming the current claimant.
+    - Update status to `in_progress`, set `claimed_by`, and update `updated_at`.
+    - Commit and push; if push fails due to remote changes, pull with rebase and retry.
+    - On conflict, reset local changes, pull remote updates, and return an error instructing a retry.
+    - Implement `tq close <id>` to set status `done` and `tq cancel <id>` to set status `cancelled`.
+    - Commit and push these shortcuts using the same git helper.
+    - Update `README.md` with shortcut command examples and claim behavior.
+  done: false
+- category: functional
+  description: Implement `tq git <command>` to run git commands inside the tasks repo.
+  steps:
+    - Resolve the tasks directory from local or global mode.
+    - Execute `git` with the provided arguments in that directory and stream the output.
+    - Return the underlying exit code so callers can detect failures.
+    - Update `README.md` with `tq git` usage and examples.
+  done: false
+- category: testing
+  description: Add targeted tests to protect parsing, filtering, and output behavior.
+  steps:
+    - Write tests for frontmatter parsing, required fields, and default priority behavior.
+    - Write tests for id generation and collision handling with existing tasks.
+    - Write tests for filter matching across all supported fields.
+    - Write tests for `--json` output schemas for list and show.
+    - Run `bun test` to verify everything passes.
+    - Update `README.md` if any testing or usage notes change.
+  done: false
