@@ -2254,6 +2254,30 @@ function parseListFlags(parsed: ParsedArgs) {
   };
 }
 
+function hasNonStatusFilters(filters: TaskListFilters) {
+  return (
+    filters.names.length > 0 ||
+    filters.priorities.length > 0 ||
+    filters.claimedBy.length > 0 ||
+    filters.createdAt.length > 0 ||
+    filters.updatedAt.length > 0
+  );
+}
+
+function formatEmptyListMessage(input: ReturnType<typeof parseListFlags>) {
+  const statuses = input.filters.statuses;
+  const defaultOpen = statuses.length === 0 && !input.all;
+  const onlyOpen = statuses.length === 1 && statuses[0] === "open";
+  const hasExtraFilters = hasNonStatusFilters(input.filters);
+  if (!hasExtraFilters && (defaultOpen || onlyOpen)) {
+    return "No open tasks.";
+  }
+  if (hasExtraFilters) {
+    return "No tasks match the provided filters.";
+  }
+  return "No tasks found.";
+}
+
 async function handleListCommand(parsed: ParsedArgs) {
   let input: ReturnType<typeof parseListFlags>;
   try {
@@ -2282,6 +2306,8 @@ async function handleListCommand(parsed: ParsedArgs) {
       console.log(formatTaskListJson(entries).trimEnd());
     } else if (entries.length > 0) {
       console.log(entries.map(formatTaskSummary).join("\n"));
+    } else {
+      console.log(formatEmptyListMessage(input));
     }
     return 0;
   } catch (error) {
