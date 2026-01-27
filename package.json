@@ -2,9 +2,14 @@
   "name": "tq",
   "module": "index.ts",
   "type": "module",
+  "bin": {
+    "tq": "index.ts"
+  },
   "private": true,
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0"
   },
   "peerDependencies": {
     "typescript": "^5"

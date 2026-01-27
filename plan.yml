@@ -6,7 +6,7 @@
     - Add consistent exit codes and error messages for unknown commands and invalid flags.
     - Ensure the CLI runs under Bun without any Node-specific assumptions.
     - Update `README.md` to match the CLI entrypoint and help usage.
-  done: false
+  done: true
 - category: config
   description: Resolve XDG paths and persist a TOML config for machine name and global workspaces.
   steps:
