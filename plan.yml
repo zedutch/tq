@@ -111,7 +111,7 @@
     - Implement `tq close <id>` to set status `done` and `tq cancel <id>` to set status `cancelled`.
     - Commit and push these shortcuts using the same git helper.
     - Update `README.md` with shortcut command examples and claim behavior.
-  done: false
+  done: true
 - category: functional
   description: Implement `tq git <command>` to run git commands inside the tasks repo.
   steps:

@@ -873,6 +873,30 @@ type UpdateTaskOptions = {
   skipGit?: boolean;
 };
 
+type ClaimTaskOptions = {
+  tasksDir: string;
+  id: string;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+};
+
+type CloseTaskOptions = {
+  tasksDir: string;
+  id: string;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+};
+
+type CancelTaskOptions = {
+  tasksDir: string;
+  id: string;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+};
+
 export async function updateTask(options: UpdateTaskOptions) {
   const env = options.env ?? process.env;
   const id = options.id.trim();
@@ -965,6 +989,246 @@ export async function updateTask(options: UpdateTaskOptions) {
   }
 
   return { id, path: task.path, frontmatter: normalized, description };
+}
+
+async function ensureNoStagedChanges(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv,
+  actionLabel: string,
+) {
+  const staged = await runGitCommand(
+    tasksDir,
+    ["diff", "--cached", "--name-only"],
+    { env },
+  );
+  if (staged.stdout.trim()) {
+    throw new Error(
+      `Tasks repository has staged changes. Commit or unstage them before ${actionLabel} a task.`,
+    );
+  }
+}
+
+async function ensureTaskFileClean(
+  tasksDir: string,
+  id: string,
+  env: NodeJS.ProcessEnv,
+  actionLabel: string,
+) {
+  const status = await runGitCommand(
+    tasksDir,
+    ["status", "--porcelain", "--", `${id}.md`],
+    { env },
+  );
+  if (status.stdout.trim()) {
+    throw new Error(
+      `Task ${id} has uncommitted changes. Commit or discard them before ${actionLabel}.`,
+    );
+  }
+}
+
+async function stageTaskFile(
+  tasksDir: string,
+  fileName: string,
+  env: NodeJS.ProcessEnv,
+) {
+  await runGitCommand(tasksDir, ["add", "--", fileName], { env });
+  const staged = await runGitCommand(
+    tasksDir,
+    ["diff", "--cached", "--name-only"],
+    { env },
+  );
+  return staged.stdout.trim().length > 0;
+}
+
+async function pushTasksRepositoryWithRetry(
+  tasksDir: string,
+  env: NodeJS.ProcessEnv,
+  actionLabel: string,
+) {
+  try {
+    return await pushTasksRepository(tasksDir, env);
+  } catch (error) {
+    try {
+      await pullTasksRepository(tasksDir, env);
+    } catch (pullError) {
+      await runGitCommand(tasksDir, ["rebase", "--abort"], {
+        env,
+        allowFailure: true,
+      });
+      throw new Error(
+        `${actionLabel} failed due to conflicting remote updates. Please retry.`,
+      );
+    }
+    return await pushTasksRepository(tasksDir, env);
+  }
+}
+
+async function updateTaskStatus(options: {
+  tasksDir: string;
+  id: string;
+  status: TaskStatus;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+  commitMessage: string;
+  actionLabel: string;
+  retryPush?: boolean;
+}) {
+  const env = options.env ?? process.env;
+  const id = options.id.trim();
+  if (!id) {
+    throw new Error("Task id is required.");
+  }
+  if (!(await isDirectory(options.tasksDir))) {
+    throw new Error(
+      `Tasks directory not initialized at ${options.tasksDir}. Run "tq init" first.`,
+    );
+  }
+
+  if (!options.skipGit) {
+    await prepareTasksRepository(options.tasksDir, env);
+    await ensureNoStagedChanges(options.tasksDir, env, options.actionLabel);
+  }
+
+  const task = await loadTaskById(options.tasksDir, id);
+
+  if (!options.skipGit) {
+    await ensureTaskFileClean(options.tasksDir, id, env, options.actionLabel);
+  }
+
+  const updatedFrontmatter = {
+    ...task.frontmatter,
+    status: options.status,
+    updated_at: (options.now ?? new Date()).toISOString(),
+  };
+
+  const normalized = normalizeTaskFrontmatter(
+    updatedFrontmatter as Record<string, unknown>,
+  );
+  const content = formatTaskMarkdown(normalized, task.description);
+  await Bun.write(task.path, content);
+
+  if (!options.skipGit) {
+    const fileName = `${id}.md`;
+    if (await stageTaskFile(options.tasksDir, fileName, env)) {
+      await runGitCommand(
+        options.tasksDir,
+        withGitCommitIdentity(["commit", "-m", options.commitMessage], env),
+        { env },
+      );
+      if (options.retryPush) {
+        await pushTasksRepositoryWithRetry(
+          options.tasksDir,
+          env,
+          `${options.actionLabel[0]?.toUpperCase() ?? ""}${options.actionLabel.slice(1)} task ${id}`,
+        );
+      } else {
+        await pushTasksRepository(options.tasksDir, env);
+      }
+    }
+  }
+
+  return {
+    id,
+    path: task.path,
+    frontmatter: normalized,
+    description: task.description,
+  };
+}
+
+export async function claimTask(options: ClaimTaskOptions) {
+  const env = options.env ?? process.env;
+  const id = options.id.trim();
+  if (!id) {
+    throw new Error("Task id is required.");
+  }
+  if (!(await isDirectory(options.tasksDir))) {
+    throw new Error(
+      `Tasks directory not initialized at ${options.tasksDir}. Run "tq init" first.`,
+    );
+  }
+
+  if (!options.skipGit) {
+    await prepareTasksRepository(options.tasksDir, env);
+    await ensureNoStagedChanges(options.tasksDir, env, "claiming");
+  }
+
+  const task = await loadTaskById(options.tasksDir, id);
+
+  if (!options.skipGit) {
+    await ensureTaskFileClean(options.tasksDir, id, env, "claiming");
+  }
+
+  const claimedBy = resolveMachineName(await loadConfig(env), env);
+  if (task.frontmatter.claimed_by.trim()) {
+    throw new Error(
+      `Task ${id} is already claimed by ${task.frontmatter.claimed_by}.`,
+    );
+  }
+
+  const updatedFrontmatter = {
+    ...task.frontmatter,
+    status: "in_progress" as TaskStatus,
+    claimed_by: claimedBy,
+    updated_at: (options.now ?? new Date()).toISOString(),
+  };
+
+  const normalized = normalizeTaskFrontmatter(
+    updatedFrontmatter as Record<string, unknown>,
+  );
+  const content = formatTaskMarkdown(normalized, task.description);
+  await Bun.write(task.path, content);
+
+  if (!options.skipGit) {
+    const fileName = `${id}.md`;
+    if (await stageTaskFile(options.tasksDir, fileName, env)) {
+      await runGitCommand(
+        options.tasksDir,
+        withGitCommitIdentity(["commit", "-m", `tq: claim task ${id}`], env),
+        { env },
+      );
+      await pushTasksRepositoryWithRetry(
+        options.tasksDir,
+        env,
+        `Claiming task ${id}`,
+      );
+    }
+  }
+
+  return {
+    id,
+    path: task.path,
+    frontmatter: normalized,
+    description: task.description,
+  };
+}
+
+export async function closeTask(options: CloseTaskOptions) {
+  return updateTaskStatus({
+    tasksDir: options.tasksDir,
+    id: options.id,
+    status: "done",
+    now: options.now,
+    env: options.env,
+    skipGit: options.skipGit,
+    commitMessage: `tq: close task ${options.id.trim()}`,
+    actionLabel: "closing",
+    retryPush: true,
+  });
+}
+
+export async function cancelTask(options: CancelTaskOptions) {
+  return updateTaskStatus({
+    tasksDir: options.tasksDir,
+    id: options.id,
+    status: "cancelled",
+    now: options.now,
+    env: options.env,
+    skipGit: options.skipGit,
+    commitMessage: `tq: cancel task ${options.id.trim()}`,
+    actionLabel: "cancelling",
+    retryPush: true,
+  });
 }
 
 type TaskRecord = {
@@ -1220,6 +1484,15 @@ Update options:
 
 Show options:
   --json            emit JSON output
+
+Claim options:
+  (no options)
+
+Close options:
+  (no options)
+
+Cancel options:
+  (no options)
 
 List options:
   -n <text>         filter by name (repeatable)
@@ -1785,6 +2058,18 @@ function parseShowFlags(parsed: ParsedArgs) {
   };
 }
 
+function parseSingleIdCommand(parsed: ParsedArgs, label: string) {
+  if (parsed.positionals.length === 0) {
+    throw new Error(`${label} requires a task id.`);
+  }
+  if (parsed.positionals.length > 1) {
+    throw new Error(`${label} accepts only one task id.`);
+  }
+  return {
+    id: parsed.positionals[0] ?? "",
+  };
+}
+
 async function handleShowCommand(parsed: ParsedArgs) {
   let input: ReturnType<typeof parseShowFlags>;
   try {
@@ -1819,6 +2104,96 @@ async function handleShowCommand(parsed: ParsedArgs) {
   }
 }
 
+async function handleClaimCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseSingleIdCommand>;
+  try {
+    input = parseSingleIdCommand(parsed, "claim");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const claimed = await claimTask({
+      tasksDir: resolved.tasksDir,
+      id: input.id,
+    });
+    console.log(claimed.id);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
+async function handleCloseCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseSingleIdCommand>;
+  try {
+    input = parseSingleIdCommand(parsed, "close");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const closed = await closeTask({
+      tasksDir: resolved.tasksDir,
+      id: input.id,
+    });
+    console.log(closed.id);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
+async function handleCancelCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseSingleIdCommand>;
+  try {
+    input = parseSingleIdCommand(parsed, "cancel");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const cancelled = await cancelTask({
+      tasksDir: resolved.tasksDir,
+      id: input.id,
+    });
+    console.log(cancelled.id);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
 async function routeCommand(parsed: ParsedArgs) {
   if (isHelpRequest(parsed.command, parsed.flags)) {
     console.log(helpText.trimEnd());
@@ -1845,6 +2220,15 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "show") {
     return handleShowCommand(parsed);
+  }
+  if (parsed.command === "claim") {
+    return handleClaimCommand(parsed);
+  }
+  if (parsed.command === "close") {
+    return handleCloseCommand(parsed);
+  }
+  if (parsed.command === "cancel") {
+    return handleCancelCommand(parsed);
   }
   return fail(`Command "${parsed.command}" not implemented yet.`, false);
 }

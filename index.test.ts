@@ -3,6 +3,9 @@ import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  cancelTask,
+  claimTask,
+  closeTask,
   createTask,
   updateTask,
   formatConfig,
@@ -520,6 +523,144 @@ describe("task updates", () => {
           skipGit: true,
         }),
       ).rejects.toThrow("Invalid task id");
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("task claim/close/cancel", () => {
+  test("claims a task and sets claimed_by", async () => {
+    await withTempEnv(async () => {
+      const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-claim-"));
+      const now = new Date("2026-01-27T14:00:00.000Z");
+
+      try {
+        await writeTaskFile(
+          tasksDir,
+          "a1b2",
+          {
+            name: "Claim me",
+            created_at: "2026-01-27T13:00:00.000Z",
+            updated_at: "2026-01-27T13:00:00.000Z",
+            status: "open",
+            claimed_by: "",
+            priority: 2,
+          },
+          "Take ownership",
+        );
+
+        const claimed = await claimTask({
+          tasksDir,
+          id: "a1b2",
+          now,
+          skipGit: true,
+          env: { ...process.env, USER: "robin" },
+        });
+
+        expect(claimed.frontmatter.status).toBe("in_progress");
+        expect(claimed.frontmatter.claimed_by).toBe("robin");
+        expect(claimed.frontmatter.updated_at).toBe(now.toISOString());
+      } finally {
+        await rm(tasksDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("rejects claiming an already claimed task", async () => {
+    await withTempEnv(async () => {
+      const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-claim-"));
+
+      try {
+        await writeTaskFile(
+          tasksDir,
+          "b2c3",
+          {
+            name: "Already claimed",
+            created_at: "2026-01-27T13:00:00.000Z",
+            updated_at: "2026-01-27T13:00:00.000Z",
+            status: "in_progress",
+            claimed_by: "sam",
+            priority: 1,
+          },
+          "Owned by sam",
+        );
+
+        await expect(
+          claimTask({
+            tasksDir,
+            id: "b2c3",
+            skipGit: true,
+            env: { ...process.env, USER: "robin" },
+          }),
+        ).rejects.toThrow("already claimed by sam");
+      } finally {
+        await rm(tasksDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("closes a task by setting status to done", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-close-"));
+    const now = new Date("2026-01-27T15:00:00.000Z");
+
+    try {
+      await writeTaskFile(
+        tasksDir,
+        "c3d4",
+        {
+          name: "Close me",
+          created_at: "2026-01-27T13:00:00.000Z",
+          updated_at: "2026-01-27T13:00:00.000Z",
+          status: "open",
+          claimed_by: "robin",
+          priority: 2,
+        },
+        "Finish work",
+      );
+
+      const closed = await closeTask({
+        tasksDir,
+        id: "c3d4",
+        now,
+        skipGit: true,
+      });
+
+      expect(closed.frontmatter.status).toBe("done");
+      expect(closed.frontmatter.updated_at).toBe(now.toISOString());
+    } finally {
+      await rm(tasksDir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels a task by setting status to cancelled", async () => {
+    const tasksDir = await mkdtemp(path.join(tmpdir(), "tq-cancel-"));
+    const now = new Date("2026-01-27T16:00:00.000Z");
+
+    try {
+      await writeTaskFile(
+        tasksDir,
+        "d4e5",
+        {
+          name: "Cancel me",
+          created_at: "2026-01-27T13:00:00.000Z",
+          updated_at: "2026-01-27T13:00:00.000Z",
+          status: "open",
+          claimed_by: "",
+          priority: 2,
+        },
+        "No longer needed",
+      );
+
+      const cancelled = await cancelTask({
+        tasksDir,
+        id: "d4e5",
+        now,
+        skipGit: true,
+      });
+
+      expect(cancelled.frontmatter.status).toBe("cancelled");
+      expect(cancelled.frontmatter.updated_at).toBe(now.toISOString());
     } finally {
       await rm(tasksDir, { recursive: true, force: true });
     }

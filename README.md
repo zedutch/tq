@@ -12,7 +12,7 @@ To run the CLI:
 bun run index.ts -- --help
 ```
 
-The CLI entrypoint is `tq`. `init`, `create`, `update`, `list`, and `show` are available now; additional subcommands (like `claim`) are planned.
+The CLI entrypoint is `tq`. `init`, `create`, `update`, `list`, `show`, `claim`, `close`, and `cancel` are available now.
 
 ## Configuration
 
@@ -94,6 +94,21 @@ Use `--json` for structured output:
 
 ```bash
 tq show ab12 --json
+```
+
+## Claiming and finishing tasks
+
+Use `tq claim <id>` to claim a task. Claiming sets the status to `in_progress` and fills `claimed_by` with the configured machine name (or `USER`/`LOGNAME`).
+
+```bash
+tq claim ab12
+```
+
+Use `tq close <id>` to mark a task as done and `tq cancel <id>` to mark it as cancelled.
+
+```bash
+tq close ab12
+tq cancel ab12
 ```
 
 ## Task repository
