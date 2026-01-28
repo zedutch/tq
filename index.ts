@@ -960,6 +960,14 @@ type CancelTaskOptions = {
   skipGit?: boolean;
 };
 
+type ReopenTaskOptions = {
+  tasksDir: string;
+  id: string;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
+  skipGit?: boolean;
+};
+
 export async function updateTask(options: UpdateTaskOptions) {
   const env = options.env ?? process.env;
   const id = options.id.trim();
@@ -1109,6 +1117,7 @@ async function updateTaskStatus(options: {
   commitMessage: string;
   actionLabel: string;
   retryPush?: boolean;
+  clearClaim?: boolean;
 }) {
   const env = options.env ?? process.env;
   const id = options.id.trim();
@@ -1137,6 +1146,11 @@ async function updateTaskStatus(options: {
     status: options.status,
     updated_at: (options.now ?? new Date()).toISOString(),
   };
+
+  if (options.clearClaim) {
+    updatedFrontmatter.claimed_by = "";
+    updatedFrontmatter.claimed_at = "";
+  }
 
   const normalized = normalizeTaskFrontmatter(
     updatedFrontmatter as Record<string, unknown>,
@@ -1267,6 +1281,21 @@ export async function cancelTask(options: CancelTaskOptions) {
     commitMessage: `tq: cancel task ${options.id.trim()}`,
     actionLabel: "cancelling",
     retryPush: true,
+  });
+}
+
+export async function reopenTask(options: ReopenTaskOptions) {
+  return updateTaskStatus({
+    tasksDir: options.tasksDir,
+    id: options.id,
+    status: "open",
+    now: options.now,
+    env: options.env,
+    skipGit: options.skipGit,
+    commitMessage: `tq: reopen task ${options.id.trim()}`,
+    actionLabel: "reopening",
+    retryPush: true,
+    clearClaim: true,
   });
 }
 
@@ -1564,6 +1593,7 @@ type ParsedArgs = {
 
 const knownCommands = new Set([
   "init",
+  "config",
   "create",
   "update",
   "list",
@@ -1573,6 +1603,7 @@ const knownCommands = new Set([
   "claim",
   "close",
   "cancel",
+  "reopen",
   "git",
   "help",
 ]);
@@ -1587,6 +1618,7 @@ Usage:
 
 Commands:
   init      initialize a workspace
+  config    update configuration
   create    create a task
   update    update a task
   list      list tasks
@@ -1596,6 +1628,7 @@ Commands:
   claim     claim a task
   close     close a task
   cancel    cancel a task
+  reopen    reopen a task
   git       run git in tasks repo
   help      show this help
 
@@ -1605,6 +1638,9 @@ Options:
 
 Init options:
   --stealth  store tasks in XDG data dir (no .tasks in this repo; use when you can't or won't ignore it)
+
+Config usage:
+  tq config <key=value> [key=value...]
 
 Create options:
   -d, --description <text>  task description
@@ -1629,6 +1665,9 @@ Close options:
 Cancel options:
   (no options)
 
+Reopen options:
+  (no options)
+
 List options:
   -n, --name <text>          filter by name (repeatable)
   -s, --status <status>      filter by status (repeatable)
@@ -1650,6 +1689,22 @@ Usage:
 Options:
   --stealth  store tasks in XDG data dir (no .tasks in this repo; use when you can't or won't ignore it)
   -h, --help                 show help for init
+`,
+  config: `tq config - update configuration
+
+Usage:
+  tq config <key=value> [key=value...]
+
+Supported keys:
+  machine.name
+  workspaces.<path>
+
+Examples:
+  tq config machine.name="sangoku"
+  tq config workspaces./path/to/project=a1b2
+
+Options:
+  -h, --help                 show help for config
 `,
   create: `tq create - create a task
 
@@ -1747,6 +1802,14 @@ Usage:
 
 Options:
   -h, --help show help for cancel
+`,
+  reopen: `tq reopen - reopen a task
+
+Usage:
+  tq reopen <id>
+
+Options:
+  -h, --help show help for reopen
 `,
   git: `tq git - run git in tasks repo
 
@@ -2312,6 +2375,52 @@ function parseListFlags(parsed: ParsedArgs) {
   };
 }
 
+type ConfigAssignment =
+  | { kind: "machine.name"; value: string }
+  | { kind: "workspaces"; key: string; value: string };
+
+function parseConfigAssignment(raw: string): ConfigAssignment {
+  const input = raw.trim();
+  if (!input) {
+    throw new Error("Config assignments cannot be empty.");
+  }
+  const eqIndex = input.indexOf("=");
+  if (eqIndex === -1) {
+    throw new Error(`Config assignment "${raw}" must include "=".`);
+  }
+  const keyPath = input.slice(0, eqIndex).trim();
+  const valueRaw = input.slice(eqIndex + 1);
+  if (!keyPath) {
+    throw new Error(`Config assignment "${raw}" is missing a key.`);
+  }
+  const value = valueRaw.trim();
+  if (!value) {
+    throw new Error(`Config assignment "${raw}" is missing a value.`);
+  }
+  if (keyPath === "machine.name") {
+    return { kind: "machine.name", value };
+  }
+  if (keyPath.startsWith("workspaces.")) {
+    const workspaceKey = keyPath.slice("workspaces.".length).trim();
+    if (!workspaceKey) {
+      throw new Error(`Config assignment "${raw}" is missing a workspace key.`);
+    }
+    return { kind: "workspaces", key: workspaceKey, value };
+  }
+  throw new Error(`Unsupported config key "${keyPath}".`);
+}
+
+function parseConfigFlags(parsed: ParsedArgs) {
+  const flagNames = Object.keys(parsed.flags);
+  if (flagNames.length > 0) {
+    throw new Error("config does not accept flags.");
+  }
+  if (parsed.positionals.length === 0) {
+    throw new Error("config requires at least one key=value pair.");
+  }
+  return parsed.positionals.map((value) => parseConfigAssignment(value));
+}
+
 function hasNonStatusFilters(filters: TaskListFilters) {
   return (
     filters.names.length > 0 ||
@@ -2374,6 +2483,33 @@ async function handleListCommand(parsed: ParsedArgs) {
     } else {
       console.log(formatEmptyListMessage({ ...input, filters }));
     }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
+async function handleConfigCommand(parsed: ParsedArgs) {
+  let assignments: ConfigAssignment[];
+  try {
+    assignments = parseConfigFlags(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  try {
+    const config = await loadConfig();
+    for (const assignment of assignments) {
+      if (assignment.kind === "machine.name") {
+        config.machine.name = assignment.value;
+      } else {
+        config.workspaces[assignment.key] = assignment.value;
+      }
+    }
+    await saveConfig(config);
+    console.log(`Updated config at ${resolveConfigPath()}.`);
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2596,7 +2732,7 @@ async function handleClaimCommand(parsed: ParsedArgs) {
       tasksDir: resolved.tasksDir,
       id: input.id,
     });
-    console.log(claimed.id);
+    console.log(`Task ${claimed.id} claimed`);
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2657,6 +2793,36 @@ async function handleCancelCommand(parsed: ParsedArgs) {
       id: input.id,
     });
     console.log(cancelled.id);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+}
+
+async function handleReopenCommand(parsed: ParsedArgs) {
+  let input: ReturnType<typeof parseSingleIdCommand>;
+  try {
+    input = parseSingleIdCommand(parsed, "reopen");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, true);
+  }
+
+  let resolved: ResolvedWorkspace;
+  try {
+    resolved = await resolveTasksDirectory();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail(message, false);
+  }
+
+  try {
+    const reopened = await reopenTask({
+      tasksDir: resolved.tasksDir,
+      id: input.id,
+    });
+    console.log(reopened.id);
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2738,6 +2904,9 @@ async function routeCommand(parsed: ParsedArgs) {
   if (parsed.command === "init") {
     return handleInitCommand(parsed);
   }
+  if (parsed.command === "config") {
+    return handleConfigCommand(parsed);
+  }
   if (parsed.command === "create") {
     return handleCreateCommand(parsed);
   }
@@ -2764,6 +2933,9 @@ async function routeCommand(parsed: ParsedArgs) {
   }
   if (parsed.command === "cancel") {
     return handleCancelCommand(parsed);
+  }
+  if (parsed.command === "reopen") {
+    return handleReopenCommand(parsed);
   }
   if (parsed.command === "git") {
     return handleGitCommand(parsed);
