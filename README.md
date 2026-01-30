@@ -18,7 +18,7 @@ To run the CLI:
 bun run index.ts -- --help
 ```
 
-The CLI entrypoint is `tq`. `init`, `create`, `update`, `list`, `show`, `claim`, `close`, `cancel`, and `git` are available now.
+The CLI entrypoint is `tq`.
 
 ## Configuration
 
@@ -50,7 +50,7 @@ Use `tq init` to set up task storage for the current workspace. By default it us
 Use `tq create` to write a new task file with defaults and commit it to the tasks repository. The command returns the new task id.
 
 ```bash
-tq create --name "Add task filters" --description "Support filtering by status." --priority 1
+tq create "Add task filters" -d "Support filtering by status." -p 1
 ```
 
 `status` defaults to `open`, `priority` defaults to `2`, `created_by` is set to the current machine name, and `claimed_by`/`claimed_at` start empty.
@@ -88,6 +88,8 @@ Use `--json` to emit structured output:
 ```bash
 tq list --json
 ```
+
+By default `tq list` only shows issues that are ready to work on. Use `tq list --all` to include claimed, closed and cancelled tasks.
 
 ## Showing tasks
 
@@ -136,7 +138,7 @@ Each task is a Markdown file named `<id>.md`, where the id is 4 lowercase alphan
 ---
 name: "Review queue"
 created_at: "2026-01-27T10:00:00.000Z"
-created_by: "robin"
+created_by: "machine_name"
 updated_at: "2026-01-27T10:00:00.000Z"
 status: "open"
 claimed_by: ""
@@ -149,4 +151,3 @@ Describe the work in Markdown here.
 
 `priority` is an integer from 0 to 4. If it is missing when loading a task, `tq` defaults it to `2`.
 
-This project was created using `bun init` in bun v1.3.4. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
