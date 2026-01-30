@@ -1,5 +1,9 @@
 # tq
 
+**Git-first agent-centric task queue using simple markdown files**
+
+[![License](https://img.shields.io/github/license/steveyegge/beads)](LICENSE)
+
 To install dependencies:
 
 ```bash
